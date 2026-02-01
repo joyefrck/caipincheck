@@ -1,7 +1,9 @@
 import { Recipe, UserPreferences } from "../types";
 
+const API_BASE_URL = "/api";
+
 // 后端代理路由
-const PROXY_API_URL = '/api/ai/chat';
+const PROXY_API_URL = `${API_BASE_URL}/ai/chat`;
 
 // JSON Schema 定义
 const recipeSchema = {
@@ -116,7 +118,9 @@ ${JSON.stringify(recipeSchema, null, 2)}`;
 1. 综合需求：${input} (请从中智能识别用户提到的【食材】、【口味】或【特定菜系】)
 2. 锁定偏好：本轮必须遵循【${prefs.cuisine}】架构 (特别是：${prefs.subCuisine})。
 3. 就餐人数：${prefs.diners} 人
-4. 默认兜底偏好：如果用户没指定口味/菜系，且锁定偏好为默认值，请执行【辣的】+【中餐(湘菜)】风格。
+4. 动态偏好决策：
+   - 如果用户输入了具体的菜名（如“红烧肉”、“盐水虾”），请严格按照该菜品的传统做法生成，**严禁**强行将其改为辣味或湘菜风格。
+   - 如果用户仅提供了模糊的食材或需求（如“猪肉”、“随便弄两个菜”），且没有明确指定口味，请执行【辣的】+【中餐(湘菜)】风格作为默认兜底。
 5. 用户偏好背景：${userTasteProfile || '尚无记录'}。
 6. 严格回避：绝对禁止生成以下方案：${excludedTitles.join(', ')}。
 

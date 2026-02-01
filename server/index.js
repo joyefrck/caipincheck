@@ -3,9 +3,18 @@ import cors from "cors";
 import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import fs from "fs";
+import cron from "node-cron";
+import dotenv from "dotenv";
+import { getRecipeLinks, scrapeXianghaRecipe } from "./scrapers/xiangha.js";
 
+// 加载环境变量
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dbPath = join(__dirname, "../food-check.db");
+
+// 加载环境变量
+dotenv.config();
+dotenv.config({ path: join(__dirname, "../.env.local") });
 
 const app = express();
 const port = 3001;
@@ -48,16 +57,31 @@ function initDb() {
       dishes TEXT,
       createdAt INTEGER
     )`);
+
+    // 基础菜谱库 (爬虫抓取)
+    db.run(`CREATE TABLE IF NOT EXISTS base_recipes (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      source_url TEXT UNIQUE,
+      ingredients TEXT,
+      steps TEXT,
+      tags TEXT,
+      createdAt INTEGER
+    )`);
   });
 }
 
-// --- 静态资源托管 (仅用于生产环境) ---
-const distPath = join(__dirname, "../dist");
-app.use(express.static(distPath));
+// --- 数据库初始化完成 ---
 
 // --- AI 代理配置 ---
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || process.env.VITE_DEEPSEEK_API_KEY;
+
+if (DEEPSEEK_API_KEY) {
+    console.log("DeepSeek API Key loaded successfully.");
+} else {
+    console.warn("DeepSeek API Key NOT found in environment variables.");
+}
 
 // AI 代理路由
 app.post('/api/ai/chat', async (req, res) => {
@@ -65,6 +89,48 @@ app.post('/api/ai/chat', async (req, res) => {
     return res.status(500).json({ error: "服务器未配置 DEEPSEEK_API_KEY" });
   }
 
+  // --- 基表优先匹配逻辑 ---
+  const userMessage = req.body.messages?.find(m => m.role === 'user')?.content || "";
+  const matchInput = userMessage.match(/综合需求：(.*?)(?:\n|$)/);
+  const dishQuery = matchInput ? matchInput[1].trim() : "";
+
+  if (dishQuery && dishQuery.length > 1) {
+    const sql = `SELECT * FROM base_recipes WHERE title LIKE ? LIMIT 1`;
+    const rows = await new Promise((resolve) => {
+      db.all(sql, [`%${dishQuery}%`], (err, rows) => resolve(rows || []));
+    });
+
+    if (rows.length > 0) {
+      const match = rows[0];
+      console.log(`[Proxy] Found DB match for "${dishQuery}": ${match.title}`);
+      
+      const simulatedRecipe = {
+        title: match.title,
+        cuisine: "中餐 (实时库匹配)",
+        dishes: [
+          {
+            name: match.title,
+            ingredients: JSON.parse(match.ingredients),
+            instructions: JSON.parse(match.steps)
+          }
+        ],
+        nutritionInfo: "💡 该食谱匹配自香哈网真实数据库，为您提供地道的烹饪参考。",
+        tags: JSON.parse(match.tags || "[]")
+      };
+
+      return res.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(simulatedRecipe)
+            }
+          }
+        ]
+      });
+    }
+  }
+
+  // --- 如果没匹配到，走 AI 生成 ---
   try {
     const response = await fetch(DEEPSEEK_API_URL, {
       method: 'POST',
@@ -147,10 +213,109 @@ app.post('/api/history', (req, res) => {
   });
 });
 
+// 获取基础菜谱 (用于 AI 前置检索)
+app.get('/api/base-recipes', (req, res) => {
+  const query = req.query.q;
+  if (!query) return res.json([]);
+
+  const sql = `SELECT * FROM base_recipes WHERE title LIKE ? LIMIT 5`;
+  db.all(sql, [`%${query}%`], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows.map(row => ({
+      ...row,
+      ingredients: JSON.parse(row.ingredients),
+      steps: JSON.parse(row.steps),
+      tags: JSON.parse(row.tags)
+    })));
+  });
+});
+
+// --- 爬虫控制与定时任务 ---
+
+async function runScraper(limit = 10) {
+    console.log(`Starting scraper task (target: ${limit} new recipes)...`);
+    const baseUrl = "https://www.xiangha.com/caipu/z-recai/";
+    
+    let addedCount = 0;
+    let page = 1;
+    let maxPages = 50; // 安全限制，防止无限循环
+
+    while (addedCount < limit && page <= maxPages) {
+        console.log(`Fetching page ${page}...`);
+        const links = await getRecipeLinks(baseUrl, page);
+        
+        if (!links || links.length === 0) {
+            console.log("No more links found, stopping.");
+            break;
+        }
+
+        for (const link of links) {
+            if (addedCount >= limit) break;
+
+            try {
+                // 先检查数据库中是否已存在该链接
+                const exists = await new Promise((resolve) => {
+                    db.get(`SELECT 1 FROM base_recipes WHERE source_url = ?`, [link], (err, row) => {
+                        resolve(!!row);
+                    });
+                });
+
+                if (exists) {
+                    continue; // 跳过已抓取的
+                }
+
+                const recipe = await scrapeXianghaRecipe(link);
+                if (recipe) {
+                    const sql = `INSERT OR IGNORE INTO base_recipes (id, title, source_url, ingredients, steps, tags, createdAt) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                    const params = [recipe.id, recipe.title, recipe.source_url, recipe.ingredients, recipe.steps, recipe.tags, recipe.createdAt];
+                    
+                    await new Promise((resolve, reject) => {
+                        db.run(sql, params, (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        });
+                    });
+                    
+                    addedCount++;
+                    if (addedCount % 10 === 0) {
+                        console.log(`Progress: Added ${addedCount}/${limit} new recipes.`);
+                    }
+                }
+            } catch (err) {
+                console.error(`Scraper error for ${link}:`, err.message);
+            }
+        }
+        page++;
+    }
+    console.log(`Scraper task finished. Added ${addedCount} new recipes.`);
+}
+
+// 每天凌晨 2 点运行
+cron.schedule('0 2 * * *', () => {
+    runScraper(500);
+});
+
+// 手动触发爬虫 (管理员接口)
+app.post('/api/admin/scrape', async (req, res) => {
+    const limit = req.body.limit || 10;
+    runScraper(limit);
+    res.json({ message: "Scraper started in background", limit });
+});
+
+// --- 静态资源托管 (仅用于生产环境) ---
+const distPath = join(__dirname, "../dist");
+app.use(express.static(distPath));
+
 // 针对单页应用 (SPA) 的路由 (作为最后的中间件)
 app.use((req, res) => {
   if (!req.path.startsWith('/api')) {
-    res.sendFile(join(distPath, 'index.html'));
+    const indexPath = join(distPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send("API Endpoint not found. (Frontend build is missing, please run 'npm run build' or use dev server)");
+    }
   }
 });
 

@@ -12,3 +12,4 @@ services:
     environment:
       NODE_ENV: production
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      TZ: Asia/Shanghai

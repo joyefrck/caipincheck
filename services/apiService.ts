@@ -1,8 +1,6 @@
 import { Recipe } from "../types";
 
-const API_BASE_URL = import.meta.env.PROD 
-  ? "/api" 
-  : "http://localhost:3001/api";
+const API_BASE_URL = "/api";
 
 export const apiService = {
   // 获取收藏菜谱 (支持分页)
