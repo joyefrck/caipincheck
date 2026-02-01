@@ -111,8 +111,8 @@ app.post('/api/history', (req, res) => {
   });
 });
 
-// 针对单页应用 (SPA) 的路由
-app.get('/:path*', (req, res) => {
+// 针对单页应用 (SPA) 的路由 (作为最后的中间件)
+app.use((req, res) => {
   if (!req.path.startsWith('/api')) {
     res.sendFile(join(distPath, 'index.html'));
   }
