@@ -95,9 +95,9 @@ app.post('/api/ai/chat', async (req, res) => {
   const dishQuery = matchInput ? matchInput[1].trim() : "";
 
   if (dishQuery && dishQuery.length > 1) {
-    const sql = `SELECT * FROM base_recipes WHERE title LIKE ? LIMIT 1`;
+    const sql = `SELECT * FROM base_recipes WHERE title LIKE ? OR tags LIKE ? LIMIT 1`;
     const rows = await new Promise((resolve) => {
-      db.all(sql, [`%${dishQuery}%`], (err, rows) => resolve(rows || []));
+      db.all(sql, [`%${dishQuery}%`, `%${dishQuery}%`], (err, rows) => resolve(rows || []));
     });
 
     if (rows.length > 0) {
@@ -233,65 +233,82 @@ app.get('/api/base-recipes', (req, res) => {
 // --- 爬虫控制与定时任务 ---
 
 async function runScraper(limit = 10) {
-    console.log(`Starting scraper task (target: ${limit} new recipes)...`);
-    const baseUrl = "https://www.xiangha.com/caipu/z-recai/";
+    console.log(`Starting multi-category scraper task (target: ${limit} new recipes)...`);
+    
+    // 多品类与菜系入口
+    const targets = [
+        { name: "热菜", url: "https://www.xiangha.com/caipu/z-recai/" },
+        { name: "凉菜", url: "https://www.xiangha.com/caipu/z-liangcai/" },
+        { name: "汤羹", url: "https://www.xiangha.com/caipu/z-tanggeng/" },
+        { name: "面食", url: "https://www.xiangha.com/caipu/z-mianshi/" },
+        { name: "素菜", url: "https://www.xiangha.com/caipu/z-sucai/" },
+        { name: "荤菜", url: "https://www.xiangha.com/caipu/z-huncai/" },
+        { name: "海鲜", url: "https://www.xiangha.com/caipu/z-haixian/" },
+        // 八大菜系
+        { name: "川菜", url: "https://www.xiangha.com/caipu/x-chuancai/" },
+        { name: "湘菜", url: "https://www.xiangha.com/caipu/x-xiangcai/" },
+        { name: "粤菜", url: "https://www.xiangha.com/caipu/x-yuecai/" },
+        { name: "鲁菜", url: "https://www.xiangha.com/caipu/x-lucai/" },
+        { name: "苏菜", url: "https://www.xiangha.com/caipu/x-sucai/" },
+        { name: "浙菜", url: "https://www.xiangha.com/caipu/x-zhecai/" },
+        { name: "闽菜", url: "https://www.xiangha.com/caipu/x-mincai/" },
+        { name: "徽菜", url: "https://www.xiangha.com/caipu/x-huicai/" }
+    ];
     
     let addedCount = 0;
     let page = 1;
-    let maxPages = 50; // 安全限制，防止无限循环
+    const maxPages = 50; 
 
     while (addedCount < limit && page <= maxPages) {
-        console.log(`Fetching page ${page}...`);
-        const links = await getRecipeLinks(baseUrl, page);
-        
-        if (!links || links.length === 0) {
-            console.log("No more links found, stopping.");
-            break;
-        }
-
-        for (const link of links) {
+        for (const target of targets) {
             if (addedCount >= limit) break;
+            
+            console.log(`Fetching ${target.name} page ${page}...`);
+            const links = await getRecipeLinks(target.url, page);
+            
+            if (!links || links.length === 0) continue;
 
-            try {
-                // 先检查数据库中是否已存在该链接
-                const exists = await new Promise((resolve) => {
-                    db.get(`SELECT 1 FROM base_recipes WHERE source_url = ?`, [link], (err, row) => {
-                        resolve(!!row);
+            for (const link of links) {
+                if (addedCount >= limit) break;
+
+                try {
+                    const exists = await new Promise((resolve) => {
+                        db.get(`SELECT 1 FROM base_recipes WHERE source_url = ?`, [link], (err, row) => resolve(!!row));
                     });
-                });
 
-                if (exists) {
-                    continue; // 跳过已抓取的
-                }
+                    if (exists) continue;
 
-                // 强制间隔：防止请求过快被封 IP
-                await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
+                    // 间隔保护
+                    await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
 
-                const recipe = await scrapeXianghaRecipe(link);
-                if (recipe) {
-                    const sql = `INSERT OR IGNORE INTO base_recipes (id, title, source_url, ingredients, steps, tags, createdAt) 
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)`;
-                    const params = [recipe.id, recipe.title, recipe.source_url, recipe.ingredients, recipe.steps, recipe.tags, recipe.createdAt];
-                    
-                    await new Promise((resolve, reject) => {
-                        db.run(sql, params, (err) => {
-                            if (err) reject(err);
-                            else resolve();
+                    const recipe = await scrapeXianghaRecipe(link);
+                    if (recipe) {
+                        // 注入菜系/品类标签
+                        let tags = JSON.parse(recipe.tags);
+                        if (!tags.includes(target.name)) tags.push(target.name);
+                        recipe.tags = JSON.stringify(tags);
+
+                        const sql = `INSERT OR IGNORE INTO base_recipes (id, title, source_url, ingredients, steps, tags, createdAt) 
+                                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
+                        const params = [recipe.id, recipe.title, recipe.source_url, recipe.ingredients, recipe.steps, recipe.tags, recipe.createdAt];
+                        
+                        await new Promise((resolve, reject) => {
+                            db.run(sql, params, (err) => err ? reject(err) : resolve());
                         });
-                    });
-                    
-                    addedCount++;
-                    if (addedCount % 10 === 0) {
-                        console.log(`Progress: Added ${addedCount}/${limit} new recipes.`);
+                        
+                        addedCount++;
+                        if (addedCount % 10 === 0) {
+                            console.log(`Progress: Added ${addedCount}/${limit} new recipes across categories.`);
+                        }
                     }
+                } catch (err) {
+                    console.error(`Scraper error for ${link}:`, err.message);
                 }
-            } catch (err) {
-                console.error(`Scraper error for ${link}:`, err.message);
             }
         }
         page++;
     }
-    console.log(`Scraper task finished. Added ${addedCount} new recipes.`);
+    console.log(`Multi-category scraper finished. Total added: ${addedCount}`);
 }
 
 // 每天凌晨 2 点运行
