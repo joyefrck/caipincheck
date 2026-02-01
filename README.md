@@ -1,45 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+## 生产环境部署 (1Panel / Docker)
 
-This contains everything you need to run your app locally.
+本项目已针对 1Panel 和标准 Docker 环境进行了优化。
 
-View your app in AI Studio: https://ai.studio/apps/drive/1oeX4Gq8D18ukOmmXs8VvC_A-GhdmD43U
-
-## 生产环境部署 (Docker)
-
-如果你想通过 Docker 部署应用，请确保已安装 Docker 和 Docker Compose。
-
-1. **设置 API Key**:
-   在当前目录创建 `.env` 文件并添加：
-   ```env
-   GEMINI_API_KEY=你的API_KEY
-   ```
-
-2. **启动服务**:
+### 1. 初始部署
+1. **准备代码**:
+   克隆仓库到服务器目录：
    ```bash
-   docker-compose up -d --build
+   git clone https://github.com/joyefrck/caipincheck.git .
    ```
 
-3. **访问应用**:
-   打开浏览器访问 `http://localhost:3001`
+2. **配置环境变量**:
+   在 1Panel 的容器编排界面或通过 `.env` 文件配置以下变量：
+   - `DEEPSEEK_API_KEY`: 你的 DeepSeek API 密钥。
+   - `TZ`: `Asia/Shanghai` (确保定时任务按北京时间运行)。
 
----
-
-## 提交到 GitHub
-
-1. 初始化仓库：
+3. **启动服务**:
    ```bash
-   git init
-   git add .
-   git commit -m "chore: initial commit with docker support"
+   docker compose up -d --build
    ```
 
-2. 关联远程仓库：
-   ```bash
-   git remote add origin https://github.com/joyefrck/caipincheck.git
-   git branch -M main
-   git push -u origin main
-   ```
+### 2. 代码更新 (增量更新)
+当你推送了新的代码到 GitHub 后，执行以下命令即可平滑更新：
+1. **同步代码**: `git pull`
+2. **应用并重启**: `docker compose up -d --build`
+
+### 3. 定时任务说明
+系统内置了基于 `node-cron` 的爬虫任务：
+- **执行时间**: 每天凌晨 2:00 (北京时间)。
+- **任务内容**: 自动从香哈网抓取 500 篇全新的菜谱。
+- **去重逻辑**: 自动通过 URL 排除已存在的菜谱，确保数据库健康增长。
+
+### 4. 常见问题
+- **数据库加载失败**: 如果看到 `SQLITE_CANTOPEN`，请确保项目根目录下存在一个空的 `food-check.db` **文件**而非文件夹。
+- **测试抓取**: 部署后可访问 `/api/admin/scrape` 手动触发测试抓取。
