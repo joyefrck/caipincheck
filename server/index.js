@@ -112,7 +112,7 @@ app.post('/api/history', (req, res) => {
 });
 
 // 针对单页应用 (SPA) 的路由
-app.get('/*', (req, res) => {
+app.get('/:path*', (req, res) => {
   if (!req.path.startsWith('/api')) {
     res.sendFile(join(distPath, 'index.html'));
   }
