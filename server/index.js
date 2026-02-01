@@ -264,6 +264,9 @@ async function runScraper(limit = 10) {
                     continue; // 跳过已抓取的
                 }
 
+                // 强制间隔：防止请求过快被封 IP
+                await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
+
                 const recipe = await scrapeXianghaRecipe(link);
                 if (recipe) {
                     const sql = `INSERT OR IGNORE INTO base_recipes (id, title, source_url, ingredients, steps, tags, createdAt) 

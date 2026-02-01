@@ -1,110 +1,143 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>今天吃什么？</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧑‍🍳</text></svg>"
+    />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;700;900&display=swap" rel="stylesheet">
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;700;900&display=swap"
+      rel="stylesheet"
+    />
     <style>
-        :root {
-            --neon-orange: #FF5722;
-            --neon-purple: #9C27B0;
-            --neon-green: #4CAF50;
-            --neon-yellow: #FFEB3B;
-        }
-        body {
-            font-family: 'Public Sans', sans-serif;
-            background-color: #bc95d4;
-            background-image: radial-gradient(#000 10%, transparent 10%);
-            background-size: 20px 20px;
-        }
-        .neo-shadow {
-            box-shadow: 6px 6px 0px 0px rgba(0,0,0,1);
-        }
-        .neo-shadow-lg {
-            box-shadow: 12px 12px 0px 0px rgba(0,0,0,1);
-        }
-        .neo-shadow-hover:active {
-            box-shadow: 2px 2px 0px 0px rgba(0,0,0,1);
-            transform: translate(4px, 4px);
-        }
-        
-        /* Hand-drawn effect for inputs */
-        .hand-drawn-input {
-            border: 4px solid #000;
-            border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
-            box-shadow: 4px 4px 0px #000;
-            transition: all 0.2s ease;
-        }
-        .hand-drawn-input:focus {
-            transform: scale(1.02);
-            box-shadow: 6px 6px 0px #000;
-        }
+      :root {
+        --neon-orange: #ff5722;
+        --neon-purple: #9c27b0;
+        --neon-green: #4caf50;
+        --neon-yellow: #ffeb3b;
+      }
+      body {
+        font-family: "Public Sans", sans-serif;
+        background-color: #bc95d4;
+        background-image: radial-gradient(#000 10%, transparent 10%);
+        background-size: 20px 20px;
+      }
+      .neo-shadow {
+        box-shadow: 6px 6px 0px 0px rgba(0, 0, 0, 1);
+      }
+      .neo-shadow-lg {
+        box-shadow: 12px 12px 0px 0px rgba(0, 0, 0, 1);
+      }
+      .neo-shadow-hover:active {
+        box-shadow: 2px 2px 0px 0px rgba(0, 0, 0, 1);
+        transform: translate(4px, 4px);
+      }
 
-        /* Marquee for Chef Cai */
-        @keyframes marquee {
-            0% { transform: translateX(100%); }
-            100% { transform: translateX(-100%); }
-        }
-        .animate-marquee {
-            display: inline-block;
-            white-space: nowrap;
-            animation: marquee 10s linear infinite;
-        }
+      /* Hand-drawn effect for inputs */
+      .hand-drawn-input {
+        border: 4px solid #000;
+        border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+        box-shadow: 4px 4px 0px #000;
+        transition: all 0.2s ease;
+      }
+      .hand-drawn-input:focus {
+        transform: scale(1.02);
+        box-shadow: 6px 6px 0px #000;
+      }
 
-        /* Cooking Animation Keyframes */
-        @keyframes fry {
-            0%, 100% { transform: translateY(0) rotate(0); }
-            25% { transform: translateY(-15px) rotate(-8deg); }
-            50% { transform: translateY(0) rotate(0); }
-            75% { transform: translateY(-8px) rotate(8deg); }
+      /* Marquee for Chef Cai */
+      @keyframes marquee {
+        0% {
+          transform: translateX(100%);
         }
-        @keyframes sizzle {
-            0%, 100% { opacity: 0; transform: translateY(0) scale(0.5); }
-            50% { opacity: 1; transform: translateY(-30px) scale(1.5); }
+        100% {
+          transform: translateX(-100%);
         }
-        @keyframes star-flicker {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.5; transform: scale(0.8); }
-        }
-        .animate-fry {
-            animation: fry 0.5s infinite ease-in-out;
-        }
-        .animate-sizzle {
-            animation: sizzle 0.8s infinite ease-out;
-        }
-        .star {
-            animation: star-flicker 1s infinite alternate;
-        }
+      }
+      .animate-marquee {
+        display: inline-block;
+        white-space: nowrap;
+        animation: marquee 10s linear infinite;
+      }
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 16px;
+      /* Cooking Animation Keyframes */
+      @keyframes fry {
+        0%,
+        100% {
+          transform: translateY(0) rotate(0);
         }
-        ::-webkit-scrollbar-track {
-            background: #000;
+        25% {
+          transform: translateY(-15px) rotate(-8deg);
         }
-        ::-webkit-scrollbar-thumb {
-            background: var(--neon-orange);
-            border: 4px solid #000;
+        50% {
+          transform: translateY(0) rotate(0);
         }
+        75% {
+          transform: translateY(-8px) rotate(8deg);
+        }
+      }
+      @keyframes sizzle {
+        0%,
+        100% {
+          opacity: 0;
+          transform: translateY(0) scale(0.5);
+        }
+        50% {
+          opacity: 1;
+          transform: translateY(-30px) scale(1.5);
+        }
+      }
+      @keyframes star-flicker {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.5;
+          transform: scale(0.8);
+        }
+      }
+      .animate-fry {
+        animation: fry 0.5s infinite ease-in-out;
+      }
+      .animate-sizzle {
+        animation: sizzle 0.8s infinite ease-out;
+      }
+      .star {
+        animation: star-flicker 1s infinite alternate;
+      }
+
+      /* Custom scrollbar */
+      ::-webkit-scrollbar {
+        width: 16px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #000;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--neon-orange);
+        border: 4px solid #000;
+      }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "@google/genai": "https://esm.sh/@google/genai@^1.39.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4/"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
-<body>
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@^1.39.0",
+          "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+          "react/": "https://esm.sh/react@^19.2.4/",
+          "react": "https://esm.sh/react@^19.2.4/"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="/index.css" />
+  </head>
+  <body>
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
-</body>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>

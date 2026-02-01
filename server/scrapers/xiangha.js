@@ -7,7 +7,8 @@ export async function scrapeXianghaRecipe(url) {
     const response = await axios.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
+      },
+      timeout: 10000
     });
     const $ = cheerio.load(response.data);
 
@@ -69,11 +70,12 @@ export async function scrapeXianghaRecipe(url) {
 
 export async function getRecipeLinks(baseUrl, page = 1) {
     try {
-        const pageUrl = page > 1 ? `${baseUrl}pn${page}` : baseUrl;
+        const pageUrl = page > 1 ? `${baseUrl}hot-${page}/` : baseUrl;
         const response = await axios.get(pageUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            },
+            timeout: 10000
         });
         const $ = cheerio.load(response.data);
         const links = [];

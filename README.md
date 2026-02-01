@@ -34,3 +34,6 @@
 ### 4. 常见问题
 - **数据库加载失败**: 如果看到 `SQLITE_CANTOPEN`，请确保项目根目录下存在一个空的 `food-check.db` **文件**而非文件夹。
 - **测试抓取**: 部署后可访问 `/api/admin/scrape` 手动触发测试抓取。
+
+- **查询菜谱数量**：打开容器终端，执行 `node -e "const db = new (require('sqlite3').Database)('./food-check.db'); db.get('SELECT count(*) as total FROM base_recipes', (err, row) => { console.log('当前菜谱总数:', row.total); db.close(); });"`
+
