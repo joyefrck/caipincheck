@@ -12,10 +12,6 @@ RUN npm install
 # 复制源代码
 COPY . .
 
-# 接受构建参数
-ARG VITE_DEEPSEEK_API_KEY
-ENV VITE_DEEPSEEK_API_KEY=$VITE_DEEPSEEK_API_KEY
-
 # 构建前端静态文件
 RUN npm run build
 

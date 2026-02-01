@@ -4,8 +4,6 @@ services:
   caipincheck:
     build:
       context: .
-      args:
-        VITE_DEEPSEEK_API_KEY: ${VITE_DEEPSEEK_API_KEY}
     ports:
       - "3001:3001"
     volumes:
@@ -13,4 +11,4 @@ services:
     restart: always
     environment:
       NODE_ENV: production
-      VITE_DEEPSEEK_API_KEY: ${VITE_DEEPSEEK_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}

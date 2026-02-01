@@ -1,8 +1,7 @@
 import { Recipe, UserPreferences } from "../types";
 
-// DeepSeek API 配置
-const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
-const API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY;
+// 后端代理路由
+const PROXY_API_URL = '/api/ai/chat';
 
 // JSON Schema 定义
 const recipeSchema = {
@@ -67,11 +66,10 @@ async function callDeepSeek(systemPrompt: string, userPrompt: string, useJsonMod
     requestBody.response_format = { type: "json_object" };
   }
 
-  const response = await fetch(DEEPSEEK_API_URL, {
+  const response = await fetch(PROXY_API_URL, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${API_KEY}`
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify(requestBody)
   });

@@ -55,6 +55,42 @@ function initDb() {
 const distPath = join(__dirname, "../dist");
 app.use(express.static(distPath));
 
+// --- AI 代理配置 ---
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+
+// AI 代理路由
+app.post('/api/ai/chat', async (req, res) => {
+  if (!DEEPSEEK_API_KEY) {
+    return res.status(500).json({ error: "服务器未配置 DEEPSEEK_API_KEY" });
+  }
+
+  try {
+    const response = await fetch(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        ...req.body,
+        stream: false
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(response.status).json({ error: errorText });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error("AI Proxy Error:", err);
+    res.status(500).json({ error: "AI 代理请求失败" });
+  }
+});
+
 // --- API 路由 ---
 
 // 获取收藏菜谱 (支持分页)
