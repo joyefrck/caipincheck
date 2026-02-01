@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  caipincheck:
+    build:
+      context: .
+      args:
+        - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./food-check.db:/app/food-check.db
+    restart: always
+    environment:
+      - NODE_ENV=production

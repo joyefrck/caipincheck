@@ -1,0 +1,5 @@
+{
+  "name": "NeoRecipe AI - Brutalist Cook",
+  "description": "A neo-brutalist inspired recipe generator that creates perfectly portioned, nutrition-balanced meals based on dish names, ingredients, and taste preferences using Gemini AI.",
+  "requestFramePermissions": []
+}
