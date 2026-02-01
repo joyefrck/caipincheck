@@ -90,43 +90,70 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 
   // --- 基表优先匹配逻辑 ---
+  // --- 基表优先匹配逻辑 ---
   const userMessage = req.body.messages?.find(m => m.role === 'user')?.content || "";
+  
+  // 1. 提取核心需求和人数
   const matchInput = userMessage.match(/综合需求：(.*?)(?:\n|$)/);
   const dishQuery = matchInput ? matchInput[1].trim() : "";
+  const dinersMatch = userMessage.match(/就餐人数：(\d+) 人/);
+  const diners = dinersMatch ? parseInt(dinersMatch[1]) : 1;
+  const targetDishCount = diners >= 3 ? 3 : (diners >= 2 ? 2 : 1);
 
-  if (dishQuery && dishQuery.length > 1) {
-    const sql = `SELECT * FROM base_recipes WHERE title LIKE ? OR tags LIKE ? LIMIT 1`;
-    const rows = await new Promise((resolve) => {
-      db.all(sql, [`%${dishQuery}%`, `%${dishQuery}%`], (err, rows) => resolve(rows || []));
-    });
-
-    if (rows.length > 0) {
-      const match = rows[0];
-      console.log(`[Proxy] Found DB match for "${dishQuery}": ${match.title}`);
+  if (dishQuery && dishQuery.length > 0) {
+    // 2. 关键词拆分 (空格、逗号、以及中文连接符)
+    const keywords = dishQuery.split(/[\s,，和及与、]+/).filter(k => k.length >= 1);
+    
+    if (keywords.length > 0) {
+      // 3. 构建多关键词 SQL (组合匹配或单个匹配)
+      // 我们采用更宽松的逻辑：只要匹配到其中一个核心词就考虑，但优先匹配多个词
+      let sql = `SELECT * FROM base_recipes WHERE `;
+      let conditions = [];
+      let params = [];
       
-      const simulatedRecipe = {
-        title: match.title,
-        cuisine: "中餐 (实时库匹配)",
-        dishes: [
-          {
-            name: match.title,
-            ingredients: JSON.parse(match.ingredients),
-            instructions: JSON.parse(match.steps)
-          }
-        ],
-        nutritionInfo: "💡 该食谱匹配自香哈网真实数据库，为您提供地道的烹饪参考。",
-        tags: JSON.parse(match.tags || "[]")
-      };
-
-      return res.json({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify(simulatedRecipe)
-            }
-          }
-        ]
+      keywords.forEach(kw => {
+        conditions.push(`(title LIKE ? OR tags LIKE ?)`);
+        params.push(`%${kw}%`, `%${kw}%`);
       });
+      
+      sql += conditions.join(' OR ') + ` ORDER BY (CASE WHEN title LIKE ? THEN 2 ELSE 1 END) DESC LIMIT ?`;
+      // 稍微偏向标题完全包含关键词的结果
+      params.push(`%${dishQuery}%`, targetDishCount);
+
+      const rows = await new Promise((resolve) => {
+        db.all(sql, params, (err, rows) => resolve(rows || []));
+      });
+
+      if (rows.length > 0) {
+        console.log(`[Proxy] Found ${rows.length} DB matches for keywords [${keywords.join(', ')}]`);
+        
+        const dishes = rows.map(match => ({
+          name: match.title,
+          ingredients: JSON.parse(match.ingredients),
+          instructions: JSON.parse(match.steps)
+        }));
+
+        const simulatedRecipe = {
+          id: crypto.randomUUID(),
+          title: rows.length > 1 ? `精选本地套餐：${rows[0].title}等` : rows[0].title,
+          cuisine: "中餐 (本地库优先匹配)",
+          dishes: dishes,
+          nutritionInfo: `💡 已为您从本地库优先匹配了 ${rows.length} 道相关菜品。这些食谱源自真实烹饪数据，确保地道且可操作。`,
+          tags: Array.from(new Set(rows.flatMap(r => JSON.parse(r.tags || "[]")))),
+          diners: diners,
+          createdAt: Date.now()
+        };
+
+        return res.json({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(simulatedRecipe)
+              }
+            }
+          ]
+        });
+      }
     }
   }
 
