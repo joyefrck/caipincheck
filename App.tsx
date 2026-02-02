@@ -201,27 +201,43 @@ const App: React.FC = () => {
     }
   };
 
-  const handleRecommend = () => {
+  const handleRecommend = async () => {
     setIsRecommendationMode(true);
-    const recPrefs = {
-      ...prefs,
-      cuisine: recommendationBase.cuisine,
-      subCuisine: recommendationBase.subCuisine
-    };
-    
     setSessionDisliked([]);
-    handleGenerate([], "主厨今日特供：震撼灵魂的惊喜大餐", recPrefs);
+    setLoading(true);
+    setError(null);
+    setCurrentRecipe(null);
+
+    try {
+      // 调用本地推荐 API 而非 AI 生成
+      const excludeIds = sessionDisliked;
+      const recipe = await apiService.getRecommendation('peter_yong', prefs.diners, excludeIds);
+      setCurrentRecipe(recipe);
+      setIsNewRecipe(true);
+    } catch (err: any) {
+      console.error('推荐失败:', err);
+      setError(`推荐失败：${err.message}。请确保后端服务已启动且有足够的基础菜谱数据。`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleLike = async () => {
     if (currentRecipe) {
       try {
+        // 1. 记录用户反馈（触发权重更新）
+        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'like');
+        
+        // 2. 保存到收藏
         const updated = [currentRecipe, ...savedRecipes];
         setSavedRecipes(updated);
         await apiService.saveRecipe(currentRecipe);
+        
+        // 3. 保存到历史
         saveToHistory(currentRecipe);
+        
         setIsNewRecipe(false); // 保存后进入查看模式
-        showToast('🚀 料理已存入你的私人禁地！');
+        showToast('🚀 料理已存入你的私人禁地！权重已更新');
       } catch (err) {
         console.error("保存失败:", err);
         showToast('❌ 保存失败，请检查数据库连接');
@@ -229,30 +245,39 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDislike = () => {
+  const handleDislike = async () => {
     if (currentRecipe) {
-      const newDisliked = [...sessionDisliked, currentRecipe.title];
-      setSessionDisliked(newDisliked);
-      
-      if (isRecommendationMode) {
-        // Increment seed to get a fresh random recommendation (new cuisine)
-        setRecommendationSeed(prev => prev + 1);
-        // The effect of setRecommendationSeed will update recommendationBase.
-        // We use a small timeout to ensure recommendationBase has updated before calling handleRecommend
-        // Or better yet, just trigger the generation directly with fresh values
-        const randomCuisine = CUISINE_OPTIONS[Math.floor(Math.random() * CUISINE_OPTIONS.length)];
-        let randomSub: ChineseSubCuisine = '不限';
-        if (randomCuisine === '中餐') {
-          randomSub = CHINESE_SUB_CUISINES[Math.floor(Math.random() * CHINESE_SUB_CUISINES.length)];
-        }
+      try {
+        // 1. 记录用户反馈（触发权重更新）
+        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'dislike');
         
-        handleGenerate(newDisliked, "主厨今日特供：震撼灵魂的惊喜大餐", {
-          ...prefs,
-          cuisine: randomCuisine,
-          subCuisine: randomSub
-        });
-      } else {
-        handleGenerate(newDisliked);
+        // 2. 添加到会话排除列表
+        const newDisliked = [...sessionDisliked, currentRecipe.id];
+        setSessionDisliked(newDisliked);
+        
+        // 3. 重新推荐
+        if (isRecommendationMode) {
+          // 推荐模式：直接调用推荐 API
+          setLoading(true);
+          try {
+            const recipe = await apiService.getRecommendation('peter_yong', prefs.diners, newDisliked);
+            setCurrentRecipe(recipe);
+            setIsNewRecipe(true);
+          } catch (err: any) {
+            console.error('推荐失败:', err);
+            setError(`推荐失败：${err.message}`);
+          } finally {
+            setLoading(false);
+          }
+        } else {
+          // 自定义搜索模式：重新生成
+          handleGenerate(newDisliked.map(id => 
+            history.find(h => h.id === id)?.title || id
+          ));
+        }
+      } catch (err) {
+        console.error('反馈记录失败:', err);
+        showToast('❌ 反馈记录失败');
       }
     }
   };
