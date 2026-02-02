@@ -92,9 +92,14 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 
   // --- 对话式偏好调整 ---
-  const userMessage = req.body.messages?.find(m => m.role === 'user')?.content || "";
+  let userMessage = req.body.messages?.find(m => m.role === 'user')?.content || "";
   const userId = 'peter_yong'; // 当前固定用户ID
+  let preferenceInfo = "";
   
+  // 提前提取就餐人数，用于可能的推荐转换
+  const dinersMatch = userMessage.match(/就餐人数：(\d+) 人/);
+  const diners = dinersMatch ? parseInt(dinersMatch[1]) : 1;
+
   try {
     const preferenceResult = await parsePreferenceAdjustment(userMessage);
     
@@ -149,17 +154,25 @@ app.post('/api/ai/chat', async (req, res) => {
       });
       
       // 生成确认消息
-      const confirmationMsg = generateConfirmationMessage(preferenceResult);
+      preferenceInfo = generateConfirmationMessage(preferenceResult);
+      console.log(`✅ 偏好已更新: ${preferenceInfo}`);
+
+      // 关键逻辑：如果用户是在表达偏好，我们将搜索关键词改为他们刚刚提到的内容，以确保推荐符合新偏好
+      const adjKeywords = preferenceResult.adjustments
+        .filter(a => a.action === 'increase')
+        .map(a => a.target);
       
-      // 返回确认信息（不调用AI）
-      return res.json({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: `${confirmationMsg}\n\n💡 ${preferenceResult.explanation}`
-          }
-        }]
-      });
+      if (adjKeywords.length > 0) {
+        // 构造一个新的需求描述，让后续的本地搜索或 AI 能精准匹配
+        const newQuery = adjKeywords.join(' ');
+        userMessage = `综合需求：${newQuery}\n就餐人数：${diners} 人\n(偏好更新提示：${preferenceInfo})`;
+        // 同时更新请求体，确保 AI 也能看到优化后的关键词
+        const userMsgIndex = req.body.messages?.findIndex(m => m.role === 'user');
+        if (userMsgIndex !== -1) {
+          req.body.messages[userMsgIndex].content = userMessage;
+        }
+        console.log(`📝 需求已重定向为: ${newQuery}`);
+      }
     }
   } catch (preferenceErr) {
     console.error('⚠️  偏好解析处理失败:', preferenceErr.message);
@@ -170,8 +183,7 @@ app.post('/api/ai/chat', async (req, res) => {
   // 1. 提取核心需求和人数
   const matchInput = userMessage.match(/综合需求：(.*?)(?:\n|$)/);
   let dishQuery = matchInput ? matchInput[1].trim() : "";
-  const dinersMatch = userMessage.match(/就餐人数：(\d+) 人/);
-  const diners = dinersMatch ? parseInt(dinersMatch[1]) : 1;
+  // 人数已在上方提前提取
   const targetDishCount = diners >= 3 ? 3 : (diners >= 2 ? 2 : 1);
 
   // 1.1 提取偏好菜系 (用于推荐场景的本地匹配)
@@ -257,11 +269,13 @@ app.post('/api/ai/chat', async (req, res) => {
 
         const simulatedRecipe = {
           id: crypto.randomUUID(),
-          title: filteredRows.length > 1 ? `精选本地套餐：${filteredRows[0].title}等` : filteredRows[0].title,
+          title: selectedRows.length > 1 ? `精选本地套餐：${selectedRows[0].title}等` : selectedRows[0].title,
           cuisine: "中餐 (本地库优先匹配)",
           dishes: dishes,
-          nutritionInfo: `💡 已为您从本地库优先匹配了 ${filteredRows.length} 道符合口味要求的菜品。`,
-          tags: Array.from(new Set(filteredRows.flatMap(r => JSON.parse(r.tags || "[]")))),
+          nutritionInfo: preferenceInfo 
+            ? `✅ ${preferenceInfo}\n\n💡 已为您从本地库优先匹配了 ${selectedRows.length} 道符合口味要求的菜品。`
+            : `💡 已为您从本地库优先匹配了 ${selectedRows.length} 道符合口味要求的菜品。`,
+          tags: Array.from(new Set(selectedRows.flatMap(r => JSON.parse(r.tags || "[]")))),
           diners: diners,
           createdAt: Date.now()
         };
@@ -299,6 +313,28 @@ app.post('/api/ai/chat', async (req, res) => {
     }
 
     const data = await response.json();
+    
+    // 如果有偏好更新确认语，尝试注入到 AI 生成的 JSON 内容中
+    if (preferenceInfo && data.choices?.[0]?.message?.content) {
+      try {
+        let content = data.choices[0].message.content;
+        // 尝试解析 JSON (AI 可能返回带 Markdown 的 JSON)
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const recipe = JSON.parse(jsonMatch[0]);
+          recipe.nutritionInfo = `✅ ${preferenceInfo}\n\n${recipe.nutritionInfo || ""}`;
+          // 如果原本是带 Markdown 的，保留外壳
+          if (content.includes("```")) {
+            data.choices[0].message.content = content.replace(jsonMatch[0], JSON.stringify(recipe, null, 2));
+          } else {
+            data.choices[0].message.content = JSON.stringify(recipe);
+          }
+        }
+      } catch (e) {
+        console.error("无法将确认语注入 AI 响应内容:", e);
+      }
+    }
+
     res.json(data);
   } catch (err) {
     console.error("AI Proxy Error:", err);

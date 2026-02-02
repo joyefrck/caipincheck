@@ -138,6 +138,13 @@ ${JSON.stringify(recipeSchema, null, 2)}`;
 
   const responseText = await callDeepSeek(systemPrompt, userPrompt, true);
   
+  // 检查是否是偏好调整响应
+  if (typeof responseText === 'object' && responseText.type === 'preference_update') {
+    // 这是偏好调整响应，直接返回消息给用户
+    const message = responseText.choices?.[0]?.message?.content || '偏好已更新';
+    throw new Error(`PREFERENCE_UPDATE:${message}`);
+  }
+  
   // 健壮处理：提取 JSON 字符串（防止 AI 依然返回 ```json ... ``` 包裹的格式）
   let cleanJson = responseText;
   const jsonMatch = responseText.match(/```(?:json)?([\s\S]*?)```/);

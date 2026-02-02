@@ -18,24 +18,35 @@
 
 ```mermaid
 flowchart TD
-    Start[开始推荐请求] --> GetProfile[获取用户画像]
+    Start[开始请求] --> Type{请求类型?}
+    
+    Type -->|直接推荐| GetProfile[获取用户画像]
+    Type -->|对话式建议| ParsePref[解析对话偏好]
+    
+    ParsePref --> HasPref{是否有偏好?}
+    HasPref -->|是| UpdateDB[更新画像权重]
+    UpdateDB --> Redirect[重定向需求关键词]
+    Redirect --> GetProfile
+    HasPref -->|否| GetProfile
+
     GetProfile --> GetHistory[获取7天历史记录]
     GetHistory --> FilterCandidates[过滤候选池]
     
     FilterCandidates --> CheckEmpty{候选池是否为空?}
-    CheckEmpty -->|是| Error[返回错误]
+    CheckEmpty -->|是| AI_Fallback[AI生成兜底]
     CheckEmpty -->|否| Scoring[多维度加权评分]
     
     Scoring --> Sort[按评分降序排序]
     Sort --> DiversityFilter[多样性约束选择]
     
-    DiversityFilter --> CheckCount{是否满足菜品数量?}
+    DiversityFilter --> CheckCount{满足数量?}
     CheckCount -->|否| Relax[放宽多样性限制]
     Relax --> SelectMore[选择高分菜品]
-    CheckCount -->|是| Format[格式化推荐结果]
+    CheckCount -->|是| Format[格式化并注入提示]
     SelectMore --> Format
     
-    Format --> Return[返回推荐菜谱]
+    Format --> Return[返回推荐结果]
+    AI_Fallback --> Return
 ```
 
 ---
@@ -379,14 +390,29 @@ const delta = feedbackType === 'like' ? 0.05 : -0.02; // 从0.1/-0.05降到0.05/
 
 ---
 
-## 11. 与AI生成的差异
+## 12. 对话式偏好动态调整 (Update & Redirect)
 
-| 维度 | 本地推荐算法 | AI生成 |
-|-----|-------------|--------|
-| 速度 | 快（<100ms） | 较慢（3-5s） |
-| 成本 | 无 | API调用费用 |
-| 可控性 | 高（基于规则） | 低（黑盒） |
-| 准确性 | 高（基于画像） | 中（依赖prompt） |
-| 数据来源 | 本地菜谱库 | AI知识库 |
+### 12.1 核心逻辑
 
-**优先级**: 本地推荐优先，AI作为补充（当本地库无法满足时）
+当用户在对话框输入非特定菜名（如“我喜欢吃辣的”）时，系统不再只是简单的“更新配置”，而是执行 **“更新权重 + 需求重定向”** 的组合拳。
+
+1. **解析 (Parse)**: 使用 AI 识别对话中的味型、菜系调整意图。
+2. **应用 (Apply)**: 立即更新数据库中 `user_profile` 的相应权重。
+3. **重定向 (Redirect)**: 将用户的原始对话（偏好描述）提取为关键词（如“辣”），并将其作为本次推荐的新需求传入推荐引擎。
+4. **注入 (Inject)**: 在最终返回的菜谱 `nutritionInfo` 字段中注入偏好更新的成功提示。
+
+### 12.2 用户体验映射
+
+| 用户操作 | 后端处理 | 前端反馈 |
+|---------|---------|---------|
+| 输入“我喜欢吃川菜” | 更新川菜权重 -> 重定向搜“川菜” | 看到“✅ 已增加川菜偏好” + 一套川菜推荐 |
+| 输入“不要太油腻” | 降低“油炸”权重 -> 重定向搜“清淡” | 看到“✅ 已降低油炸偏好” + 清淡健康的推荐 |
+
+---
+
+## 13. AI 辅助数据标注 (Data Enrichment)
+
+为提升本地算法的准确性，系统支持通过 AI 对存量菜谱进行“画像标注”：
+- **自动推断**: 根据菜名和现有标签推断其所属菜系、主味型（酸甜苦辣咸麻鲜）。
+- **字段补全**: 补全 `cuisine_type`, `taste_tags`, `cooking_methods`, `nutrition_tags` 字段。
+- **运行方式**: 运行 `node server/scripts/migrate_db.js` 或专用脚本。
