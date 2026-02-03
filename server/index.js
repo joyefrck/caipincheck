@@ -19,7 +19,7 @@ dotenv.config();
 dotenv.config({ path: join(__dirname, "../.env.local") });
 
 const app = express();
-const port = 3001;
+const port = 3002;
 
 app.use(cors());
 app.use(express.json());
@@ -101,7 +101,21 @@ app.post('/api/ai/chat', async (req, res) => {
   const diners = dinersMatch ? parseInt(dinersMatch[1]) : 1;
 
   try {
-    const preferenceResult = await parsePreferenceAdjustment(userMessage);
+    // 🚀 性能优化：快速预检
+    // 1. 提取核心需求，只对用户输入的内容进行检测，避开 Prompt 模板中的干扰词
+    const matchInputPre = userMessage.match(/综合需求：(.*?)(?:\s*\(|\n|$)/);
+    const dishQueryPre = matchInputPre ? matchInputPre[1].trim() : "";
+
+    // 2. 如果没有偏好关键词（如喜欢、不喜欢、更），且用户明确输入了菜名，直接跳过 AI 解析
+    const preferenceKeywords = ['喜欢', '不喜欢', '偏好', '更', '少', '多', '不要', '想吃', '不想', '爱吃', '不爱', '口味', '菜系', '清淡', '重口', '辣', '不辣'];
+    
+    // 只要针对"用户输入部分"进行检测，而不是检测整个 Prompt
+    const hasPreferenceHint = preferenceKeywords.some(kw => dishQueryPre.includes(kw));
+
+    let preferenceResult = null;
+    if (hasPreferenceHint) {
+       preferenceResult = await parsePreferenceAdjustment(userMessage);
+    }
     
     if (preferenceResult && preferenceResult.adjustments && preferenceResult.adjustments.length > 0) {
       console.log('🎯 检测到偏好调整:', preferenceResult.explanation);
@@ -180,8 +194,8 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 
   // --- 基表优先匹配逻辑 ---
-  // 1. 提取核心需求和人数
-  const matchInput = userMessage.match(/综合需求：(.*?)(?:\n|$)/);
+  // 1. 提取核心需求和人数 (停止在换行或括号，避免抓取 Prompt 里的说明)
+  const matchInput = userMessage.match(/综合需求：(.*?)(?:\s*\(|\n|$)/);
   let dishQuery = matchInput ? matchInput[1].trim() : "";
   // 人数已在上方提前提取
   const targetDishCount = diners >= 3 ? 3 : (diners >= 2 ? 2 : 1);
@@ -215,9 +229,11 @@ app.post('/api/ai/chat', async (req, res) => {
         params.push(`%${kw}%`, `%${kw}%`);
       });
       
-      sql += conditions.join(' OR ') + ` ORDER BY (CASE WHEN title LIKE ? THEN 2 ELSE 1 END) DESC LIMIT 10`;
-      // 稍微偏向标题完全包含关键词的结果
+      sql += conditions.join(' OR ') + ` ORDER BY (CASE WHEN title LIKE ? THEN 3 WHEN title LIKE ? THEN 2 ELSE 1 END) DESC LIMIT 10`;
+      // 优先：包含完整关键词
       params.push(`%${dishQuery}%`);
+      // 其次：包含部分关键词
+      params.push(`%${keywords[0]}%`);
 
       const rows = await new Promise((resolve) => {
         db.all(sql, params, (err, rows) => resolve(rows || []));
@@ -230,6 +246,8 @@ app.post('/api/ai/chat', async (req, res) => {
       const spicyKeywords = ['辣', '麻', '椒', '剁椒', '红油', '水煮', '回锅'];
       const isLightRequest = lightKeywords.some(k => dishQuery.includes(k));
 
+      const meatRegex = /肉|鸡|鸭|鱼|虾|牛|羊|猪|腿|翅|排骨|肚|肠|肺|虎皮|回锅|煲/;
+      
       for (const row of rows) {
         if (selectedRows.length >= targetDishCount) break;
 
@@ -238,7 +256,16 @@ app.post('/api/ai/chat', async (req, res) => {
           continue;
         }
 
-        // 4.2 多样性过滤：检查该菜品是否与已选结果在“核心关键词”上重复
+        // 4.2 荤素平衡过滤 (进阶：如果已经选了一道肉菜，且目标是两道菜，尝试跳过其它肉菜，除非它是强匹配)
+        const isCurrentMeat = meatRegex.test(row.title) && !row.tags.includes('素菜');
+        const hasMeatAlready = selectedRows.some(r => meatRegex.test(r.title) && !r.tags.includes('素菜'));
+        
+        // 如果已经有肉了，当前又是肉，且不是针对不同关键词的匹配（比如搜“牛肉和鸡肉”），则跳过
+        if (hasMeatAlready && isCurrentMeat && keywords.length <= 1 && targetDishCount > 1) {
+          continue; 
+        }
+
+        // 4.3 多样性过滤：检查该菜品是否与已选结果在“核心关键词”上重复
         // 获取这道菜匹配到的用户关键词
         const matchedKw = keywords.find(kw => row.title.includes(kw) || row.tags.includes(kw));
         
@@ -257,9 +284,48 @@ app.post('/api/ai/chat', async (req, res) => {
         selectedRows.push(row);
       }
 
-      // 5. 套餐配套率检查：如果无法凑齐用户要求的菜品数量，或者凑出来的组合过于单一，则放弃本地匹配，交给 AI
-      if (selectedRows.length === targetDishCount) {
-        console.log(`[Proxy] Found ${selectedRows.length} DB matches after filtering`);
+      // 5. 套餐配套率检查：只要有从本地库匹配到结果
+      if (selectedRows.length > 0) {
+        // 如果匹配到的菜不够（且用户需要更多），尝试从库里随机补几个不重复的作为搭配
+        if (selectedRows.length < targetDishCount) {
+          const needed = targetDishCount - selectedRows.length;
+          const existingIds = new Set(selectedRows.map(r => r.id));
+          const hasMeat = selectedRows.some(r => meatRegex.test(r.title) && !r.tags.includes('素菜'));
+
+          await new Promise((resolve) => {
+            // 策略：如果已经有肉，优先补素菜或汤；如果没有肉，随机补
+            let fillSql = `SELECT * FROM base_recipes WHERE id NOT IN (${Array.from(existingIds).map(() => '?').join(',')})`;
+            if (hasMeat) {
+              // 优先查找带有“素菜”或“汤羹”标签的
+              fillSql += ` AND (tags LIKE '%素菜%' OR tags LIKE '%汤羹%' OR title LIKE '%汤%')`;
+            }
+            fillSql += ` ORDER BY RANDOM() LIMIT ?`;
+            
+            db.all(fillSql, [...Array.from(existingIds), needed], (err, randomRows) => {
+              if (!err && randomRows && randomRows.length > 0) {
+                randomRows.forEach(r => {
+                  if (selectedRows.length < targetDishCount) selectedRows.push(r);
+                });
+              }
+              
+              // 如果还是不够（可能素菜库里没搜到），再无限制随机补一次
+              if (selectedRows.length < targetDishCount) {
+                const finalNeeded = targetDishCount - selectedRows.length;
+                const finalIds = new Set(selectedRows.map(r => r.id));
+                db.all(`SELECT * FROM base_recipes WHERE id NOT IN (${Array.from(finalIds).map(() => '?').join(',')}) ORDER BY RANDOM() LIMIT ?`, 
+                  [...Array.from(finalIds), finalNeeded], 
+                  (err, lastRows) => {
+                    if (!err && lastRows) lastRows.forEach(r => selectedRows.push(r));
+                    resolve();
+                  });
+              } else {
+                resolve();
+              }
+            });
+          });
+        }
+
+        console.log(`[Proxy] Finalized ${selectedRows.length} DB matches (including complementary dishes)`);
         
         const dishes = selectedRows.map(match => ({
           name: match.title,
@@ -468,7 +534,7 @@ app.post('/api/user-profile/:userId', (req, res) => {
 
 // 记录用户反馈
 app.post('/api/user-feedback', (req, res) => {
-  const { userId, recipeId, feedbackType } = req.body;
+  const { userId, recipeId, feedbackType, recipeData } = req.body;
   
   if (!userId || !recipeId || !feedbackType) {
     return res.status(400).json({ error: '缺少必要参数' });
@@ -484,7 +550,7 @@ app.post('/api/user-feedback', (req, res) => {
     
     // 反馈记录成功后，更新用户画像权重
     try {
-      await updateUserWeights(userId, recipeId, feedbackType);
+      await updateUserWeights(userId, recipeId, feedbackType, recipeData);
       res.json({ success: true, feedbackId });
     } catch (updateErr) {
       console.error('更新权重失败:', updateErr);
@@ -685,11 +751,12 @@ app.post('/api/recommend', async (req, res) => {
 });
 
 // 权重更新辅助函数
-async function updateUserWeights(userId, recipeId, feedbackType) {
+async function updateUserWeights(userId, recipeId, feedbackType, recipeData) {
   // 1. 获取当前用户画像
   const profile = await new Promise((resolve, reject) => {
     db.get('SELECT * FROM user_profile WHERE user_id = ?', [userId], (err, row) => {
       if (err) reject(err);
+      else if (!row) reject(new Error('用户画像不存在'));
       else resolve({
         taste_weights: JSON.parse(row.taste_weights),
         cuisine_weights: JSON.parse(row.cuisine_weights),
@@ -700,107 +767,85 @@ async function updateUserWeights(userId, recipeId, feedbackType) {
     });
   });
   
-  // 2. 获取菜谱信息（尝试从 base_recipes、recipes、history 中查找）
-  let recipe = await new Promise((resolve) => {
-    db.get('SELECT * FROM base_recipes WHERE id = ?', [recipeId], (err, row) => {
-      if (row) return resolve(row);
-      db.get('SELECT * FROM recipes WHERE id = ?', [recipeId], (err, row) => {
+  // 2. 获取菜谱信息（尝试从本地库查找，如果没有则使用传入的 recipeData）
+  let recipesToProcess = [];
+  
+  if (recipeData && recipeData.dishes) {
+    // 如果直接传了数据（多半是 AI 实时生成的），直接用它
+    recipesToProcess = recipeData.dishes.map(d => ({
+      title: d.name,
+      cuisine: recipeData.cuisine,
+      ingredients: JSON.stringify(d.ingredients),
+      steps: JSON.stringify(d.instructions),
+      taste_tags: JSON.stringify(recipeData.tags?.filter(t => ['酸','甜','苦','辣','咸','鲜','麻','清淡'].includes(t)) || []),
+      nutrition_tags: JSON.stringify(recipeData.tags || [])
+    }));
+  } else {
+    // 否则尝试从数据库查找
+    const dbRecipe = await new Promise((resolve) => {
+      db.get('SELECT * FROM base_recipes WHERE id = ?', [recipeId], (err, row) => {
         if (row) return resolve(row);
-        db.get('SELECT * FROM history WHERE id = ?', [recipeId], (err, row) => {
-          resolve(row || null);
+        db.get('SELECT * FROM recipes WHERE id = ?', [recipeId], (err, row) => {
+          if (row) return resolve(row);
+          db.get('SELECT * FROM history WHERE id = ?', [recipeId], (err, row) => {
+            resolve(row || null);
+          });
         });
       });
     });
-  });
+    if (dbRecipe) recipesToProcess = [dbRecipe];
+  }
   
-  if (!recipe) {
-    console.log(`⚠️  未找到菜谱 ${recipeId}，跳过权重更新`);
+  if (recipesToProcess.length === 0) {
+    console.log(`⚠️  未找到菜谱 ${recipeId} 且未提供 recipeData，跳过权重更新`);
     return;
   }
   
   // 3. 根据反馈类型调整权重
-  const delta = feedbackType === 'like' ? 0.1 : -0.05;
+  const delta = feedbackType === 'like' ? 0.05 : -0.03; // 减小调整幅度，防止震荡
   const minWeight = 0.1;
   const maxWeight = 1.0;
-  
-  // 调整菜系权重
-  if (recipe.cuisine_type || recipe.cuisine) {
+
+  for (const recipe of recipesToProcess) {
+    // 调整菜系权重
     const cuisine = recipe.cuisine_type || recipe.cuisine;
-    if (profile.cuisine_weights[cuisine] !== undefined) {
-      profile.cuisine_weights[cuisine] = Math.max(
-        minWeight,
-        Math.min(maxWeight, profile.cuisine_weights[cuisine] + delta)
-      );
-    } else {
-      // 新菜系，添加到权重表
-      profile.cuisine_weights[cuisine] = 0.5 + delta;
+    if (cuisine) {
+      const cleanCuisine = cuisine.split('(')[0].trim().replace('中餐', '').trim(); // 剔除通用词
+      if (cleanCuisine && profile.cuisine_weights[cleanCuisine] !== undefined) {
+        profile.cuisine_weights[cleanCuisine] = Math.max(minWeight, Math.min(maxWeight, profile.cuisine_weights[cleanCuisine] + delta));
+      } else if (cleanCuisine) {
+        profile.cuisine_weights[cleanCuisine] = 0.5 + delta;
+      }
     }
+    
+    // 调整口味权重
+    const tasteTags = recipe.taste_tags ? JSON.parse(recipe.taste_tags) : [];
+    tasteTags.forEach(taste => {
+      if (profile.taste_weights[taste] !== undefined) {
+        profile.taste_weights[taste] = Math.max(minWeight, Math.min(maxWeight, profile.taste_weights[taste] + delta));
+      } else {
+        profile.taste_weights[taste] = 0.5 + delta;
+      }
+    });
+    
+    // 调整成分/食材权重 (仅对喜欢的显式增加)
+    const ingredients = recipe.ingredients ? JSON.parse(recipe.ingredients) : [];
+    ingredients.slice(0, 2).forEach(ing => {
+      const ingName = typeof ing === 'object' ? ing.name : ing;
+      if (profile.ingredient_weights[ingName] !== undefined) {
+        profile.ingredient_weights[ingName] = Math.max(minWeight, Math.min(maxWeight, profile.ingredient_weights[ingName] + delta));
+      } else if (feedbackType === 'like') {
+        profile.ingredient_weights[ingName] = 0.6; 
+      }
+    });
   }
   
-  // 调整口味权重
-  const tasteTags = recipe.taste_tags ? JSON.parse(recipe.taste_tags) : [];
-  tasteTags.forEach(taste => {
-    if (profile.taste_weights[taste] !== undefined) {
-      profile.taste_weights[taste] = Math.max(
-        minWeight,
-        Math.min(maxWeight, profile.taste_weights[taste] + delta)
-      );
-    } else {
-      profile.taste_weights[taste] = 0.5 + delta;
-    }
-  });
-  
-  // 调整烹饪方法权重
-  const cookingMethods = recipe.cooking_methods ? JSON.parse(recipe.cooking_methods) : [];
-  cookingMethods.forEach(method => {
-    if (profile.cooking_method_weights[method] !== undefined) {
-      profile.cooking_method_weights[method] = Math.max(
-        minWeight,
-        Math.min(maxWeight, profile.cooking_method_weights[method] + delta)
-      );
-    } else {
-      profile.cooking_method_weights[method] = 0.5 + delta;
-    }
-  });
-  
-  // 调整营养权重
-  const nutritionTags = recipe.nutrition_tags ? JSON.parse(recipe.nutrition_tags) : [];
-  nutritionTags.forEach(nutrition => {
-    if (profile.nutrition_weights[nutrition] !== undefined) {
-      profile.nutrition_weights[nutrition] = Math.max(
-        minWeight,
-        Math.min(maxWeight, profile.nutrition_weights[nutrition] + delta)
-      );
-    } else {
-      profile.nutrition_weights[nutrition] = 0.5 + delta;
-    }
-  });
-  
-  // 调整食材权重（仅对主食材，即前 3 个）
-  const ingredients = recipe.ingredients ? JSON.parse(recipe.ingredients) : [];
-  ingredients.slice(0, 3).forEach(ing => {
-    const ingName = typeof ing === 'object' ? ing.name : ing;
-    if (profile.ingredient_weights[ingName] !== undefined) {
-      profile.ingredient_weights[ingName] = Math.max(
-        minWeight,
-        Math.min(maxWeight, profile.ingredient_weights[ingName] + delta)
-      );
-    } else {
-      profile.ingredient_weights[ingName] = 0.5 + delta;
-    }
-  });
-  
-  // 4. 更新数据库
-  const sql = `UPDATE user_profile 
-               SET taste_weights = ?, 
-                   cuisine_weights = ?, 
-                   ingredient_weights = ?,
-                   cooking_method_weights = ?,
-                   nutrition_weights = ?,
-                   updated_at = ?
-               WHERE user_id = ?`;
-  
-  const params = [
+  // 4. 写回数据库
+  const updateSql = `UPDATE user_profile 
+                     SET taste_weights = ?, cuisine_weights = ?, ingredient_weights = ?,
+                         cooking_method_weights = ?, nutrition_weights = ?, updated_at = ?
+                     WHERE user_id = ?`;
+  const updateParams = [
     JSON.stringify(profile.taste_weights),
     JSON.stringify(profile.cuisine_weights),
     JSON.stringify(profile.ingredient_weights),
@@ -810,11 +855,11 @@ async function updateUserWeights(userId, recipeId, feedbackType) {
     userId
   ];
   
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, (err) => {
+  await new Promise((resolve, reject) => {
+    db.run(updateSql, updateParams, (err) => {
       if (err) reject(err);
       else {
-        console.log(`✅ 用户 ${userId} 的权重已更新 (${feedbackType})`);
+        console.log(`✅ 用户 ${userId} 的权重已根据反馈(${feedbackType})更新`);
         resolve();
       }
     });

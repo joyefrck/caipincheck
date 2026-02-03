@@ -226,7 +226,7 @@ const App: React.FC = () => {
     if (currentRecipe) {
       try {
         // 1. 记录用户反馈（触发权重更新）
-        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'like');
+        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'like', currentRecipe);
         
         // 2. 保存到收藏
         const updated = [currentRecipe, ...savedRecipes];
@@ -249,7 +249,7 @@ const App: React.FC = () => {
     if (currentRecipe) {
       try {
         // 1. 记录用户反馈（触发权重更新）
-        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'dislike');
+        await apiService.recordFeedback('peter_yong', currentRecipe.id, 'dislike', currentRecipe);
         
         // 2. 添加到会话排除列表
         const newDisliked = [...sessionDisliked, currentRecipe.id];

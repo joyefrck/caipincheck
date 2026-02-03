@@ -17,36 +17,21 @@
 ## 2. 推荐流程
 
 ```mermaid
-flowchart TD
-    Start[开始请求] --> Type{请求类型?}
-    
-    Type -->|直接推荐| GetProfile[获取用户画像]
-    Type -->|对话式建议| ParsePref[解析对话偏好]
-    
-    ParsePref --> HasPref{是否有偏好?}
-    HasPref -->|是| UpdateDB[更新画像权重]
-    UpdateDB --> Redirect[重定向需求关键词]
-    Redirect --> GetProfile
-    HasPref -->|否| GetProfile
-
-    GetProfile --> GetHistory[获取7天历史记录]
-    GetHistory --> FilterCandidates[过滤候选池]
-    
-    FilterCandidates --> CheckEmpty{候选池是否为空?}
-    CheckEmpty -->|是| AI_Fallback[AI生成兜底]
-    CheckEmpty -->|否| Scoring[多维度加权评分]
-    
-    Scoring --> Sort[按评分降序排序]
-    Sort --> DiversityFilter[多样性约束选择]
-    
-    DiversityFilter --> CheckCount{满足数量?}
-    CheckCount -->|否| Relax[放宽多样性限制]
-    Relax --> SelectMore[选择高分菜品]
-    CheckCount -->|是| Format[格式化并注入提示]
-    SelectMore --> Format
-    
-    Format --> Return[返回推荐结果]
-    AI_Fallback --> Return
+graph TD
+A[开始请求] --> B{请求类型?}
+B --> C[获取画像]
+B --> D[解析意图]
+D --> E[精准搜索]
+D --> F[偏好调整]
+F --> G[更新画像]
+G --> C
+C --> H[过滤历史]
+H --> I[匹配逻辑]
+I --> J{数量足?}
+J -->|否| K[智能补位]
+K --> L[格式化]
+J -->|是| L
+L --> M[返回结果]
 ```
 
 ---
@@ -416,3 +401,44 @@ const delta = feedbackType === 'like' ? 0.05 : -0.02; // 从0.1/-0.05降到0.05/
 - **自动推断**: 根据菜名和现有标签推断其所属菜系、主味型（酸甜苦辣咸麻鲜）。
 - **字段补全**: 补全 `cuisine_type`, `taste_tags`, `cooking_methods`, `nutrition_tags` 字段。
 - **运行方式**: 运行 `node server/scripts/migrate_db.js` 或专用脚本。
+
+---
+
+## 14. 近期核心优化 (2025.02)
+
+针对生产环境的真实使用场景，我们对推荐系统进行了以下关键升级：
+
+### 14.1 短语速通 (Fast Pass) - 性能优化
+**问题**: 即使搜索简单的菜名（如"小炒肉"），系统也会调用 AI 分析偏好，导致 1-3秒 延迟。  
+**方案**: 引入正则预检机制。
+- **逻辑**: `if (QueryLength < 10 && !HasPreferenceKeywords)` -> **直接跳过 AI**。
+- **效果**: 本地查询响应时间降至 < 50ms (毫秒级)。
+
+### 14.2 智能补位 (Smart Filling) - 体验优化
+**问题**: 用户搜"小炒肉"（2人食），本地库只有这一道菜，导致无法凑齐 2 道，系统被迫 fallback 到 AI。  
+**方案**: 
+- 只要匹配到核心菜（哪怕只有1道），优先保留。
+- 剩余空位（Quota - 1）自动从本地库**随机选取不重复**的菜品（如手撕包菜）进行补位。
+- **效果**: 既满足了核心需求，又保证了套餐完整性。
+
+### 14.3 精准匹配优先 (Exact Match Priority) - 准确性优化
+**问题**: 搜"小炒肉"，却因为 Fuzzy Match 匹配到了"红烧肉"或"肉末茄子"。  
+**方案**: 调整 SQL 排序权重。
+- `TITLE = Query` (Weight: 3)
+- `TITLE LIKE %Query%` (Weight: 2)
+- `Generic Match` (Weight: 1)
+- **效果**: 确保"李奎"永远排在"李鬼"前面。
+
+### 14.4 严格数量控制 (Strict Dish Count)
+**问题**: AI 偶尔热情过头，2人吃饭推荐3个菜。  
+**方案**: Prompt 约束升级。
+- 从 `"At least 2 dishes"` 改为 `"Exactly 2 dishes"` (恰好 N 个)。
+- **效果**: 杜绝铺张浪费，严格遵守用户设定。
+
+### 14.5 荤素平衡约束 (Meat-Veggie Balance) - 健康/多样性优化
+**问题**: 搜"牛肉"，结果匹配到了"红烧牛肉" + "干煸牛肉丝"，全肉且主材料重复。  
+**方案**: 引入成分检测与补位偏向。
+- **本地识别**: 引入 `meatRegex` 识别关键词。若首选是肉菜，后续空位强制从标签中检索 `素菜` 或 `汤羹`。
+- **去重逻辑**: 同一餐中严禁出现两道主材料一致的肉菜。
+- **效果**: 自动达成“一荤一素”或“两菜一汤”的合理平衡，更贴近真实生活。
+

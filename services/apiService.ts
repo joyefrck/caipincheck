@@ -63,11 +63,11 @@ export const apiService = {
   },
 
   // 记录用户反馈（喜欢/不喜欢）
-  recordFeedback: async (userId: string, recipeId: string, feedbackType: 'like' | 'dislike'): Promise<void> => {
+  recordFeedback: async (userId: string, recipeId: string, feedbackType: 'like' | 'dislike', recipeData?: Recipe): Promise<void> => {
     const response = await fetch(`${API_BASE_URL}/user-feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, recipeId, feedbackType }),
+      body: JSON.stringify({ userId, recipeId, feedbackType, recipeData }),
     });
     if (!response.ok) throw new Error("记录反馈失败");
   },
