@@ -620,10 +620,13 @@ app.post('/api/recommend', async (req, res) => {
       let scoreDetails = {};
       
       // 菜系匹配度
-      if (recipe.cuisine_type && profile.cuisineWeights[recipe.cuisine_type]) {
-        const cuisineScore = profile.cuisineWeights[recipe.cuisine_type];
-        score += cuisineScore * 2;  // 菜系权重 × 2
-        scoreDetails.cuisine = cuisineScore;
+      if (recipe.cuisine_type) {
+        const cleanCuisine = recipe.cuisine_type.split('(')[0].trim().replace('中餐', '').trim();
+        const cuisineScore = profile.cuisineWeights[cleanCuisine] || profile.cuisineWeights[recipe.cuisine_type];
+        if (cuisineScore) {
+          score += cuisineScore * 2;  // 菜系权重 × 2
+          scoreDetails.cuisine = cuisineScore;
+        }
       }
       
       // 口味匹配度
@@ -674,12 +677,21 @@ app.post('/api/recommend', async (req, res) => {
     const usedIngredients = new Set();
     const usedCookingMethods = new Set();
     const usedCuisines = new Set();
+    let soupCount = 0;
     
     for (const candidate of scoredCandidates) {
       if (selectedRecipes.length >= targetDishCount) break;
       
       const { recipe } = candidate;
       
+      // 检查菜品类型多样性（目前主要是防止两个汤）
+      const recipeText = (recipe.title + (recipe.tags || []) + (recipe.cuisine_type || '')).toLowerCase();
+      const isSoup = recipeText.includes('汤') || recipeText.includes('羹') || recipeText.includes('粥');
+      
+      if (isSoup && soupCount >= 1 && targetDishCount > 1) {
+        continue; // 如果已经是多道菜模式，且已经选了一个汤，跳过
+      }
+
       // 检查食材多样性
       const ingredients = recipe.ingredients ? JSON.parse(recipe.ingredients) : [];
       const mainIngredients = ingredients.slice(0, 2).map(ing => 
@@ -703,6 +715,7 @@ app.post('/api/recommend', async (req, res) => {
         mainIngredients.forEach(ing => usedIngredients.add(ing));
         cookingMethods.forEach(method => usedCookingMethods.add(method));
         if (recipe.cuisine_type) usedCuisines.add(recipe.cuisine_type);
+        if (isSoup) soupCount++;
       }
     }
     
@@ -725,7 +738,7 @@ app.post('/api/recommend', async (req, res) => {
       ingredients: JSON.parse(recipe.ingredients),
       instructions: JSON.parse(recipe.steps).map((step, idx) => ({
         step: idx + 1,
-        description: step
+        description: typeof step === 'string' ? step : (step.description || step.content || JSON.stringify(step))
       }))
     }));
     

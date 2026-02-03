@@ -13,3 +13,7 @@ docker compose build --no-cache
 
 # 第二步：启动并替换旧容器
 docker compose up -d
+
+
+# 给菜谱打标签（AI 分析）
+docker compose exec caipincheck npm run db:enrich
