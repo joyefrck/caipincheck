@@ -19,7 +19,7 @@ dotenv.config();
 dotenv.config({ path: join(__dirname, "../.env.local") });
 
 const app = express();
-const port = 3002;
+const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
