@@ -20,6 +20,17 @@ export const apiService = {
     if (!response.ok) throw new Error("保存菜谱失败");
   },
 
+  // 保存AI生成的菜谱到base_recipes（用于后续推荐）
+  saveToBaseRecipes: async (recipe: Recipe): Promise<{savedCount: number, totalDishes: number, errors?: any[]}> => {
+    const response = await fetch(`${API_BASE_URL}/base-recipes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dishes: recipe.dishes }),
+    });
+    if (!response.ok) throw new Error("保存到基础菜谱库失败");
+    return response.json();
+  },
+
   // 获取生成历史
   getHistory: async (): Promise<Recipe[]> => {
     const response = await fetch(`${API_BASE_URL}/history`);

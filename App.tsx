@@ -241,8 +241,20 @@ const App: React.FC = () => {
         // 3. 保存到历史
         saveToHistory(currentRecipe);
         
+        // 4. 如果是AI生成的，异步保存单菜到base_recipes
+        apiService.saveToBaseRecipes(currentRecipe)
+          .then(result => {
+            console.log(`✅ 已将 ${result.savedCount}/${result.totalDishes} 道菜保存到基础菜谱库`);
+            if (result.errors && result.errors.length > 0) {
+              console.warn('部分菜品保存失败:', result.errors);
+            }
+          })
+          .catch(err => {
+            console.warn('保存到基础菜谱库失败（不影响收藏）:', err);
+          });
+        
         setIsNewRecipe(false); // 保存后进入查看模式
-        showToast('🚀 料理已存入你的私人禁地！权重已更新');
+        showToast('🚀 料理已存入你的私人禁地！权重已更新，已加入推荐库');
       } catch (err) {
         console.error("保存失败:", err);
         showToast('❌ 保存失败，请检查数据库连接');
@@ -277,9 +289,13 @@ const App: React.FC = () => {
           }
         } else {
           // 自定义搜索模式：重新生成
-          handleGenerate(newDisliked.map(id => 
-            history.find(h => h.id === id)?.title || id
-          ));
+          // 不仅排除套餐标题，还要排除所有单菜名称
+          const dishNames = currentRecipe.dishes.map(d => d.name);
+          const allExcludedNames = [
+            ...newDisliked.map(id => history.find(h => h.id === id)?.title || id),
+            ...dishNames
+          ];
+          handleGenerate(allExcludedNames);
         }
       } catch (err) {
         console.error('反馈记录失败:', err);

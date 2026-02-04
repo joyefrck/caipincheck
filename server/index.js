@@ -169,7 +169,7 @@ function initDb() {
       createdAt INTEGER
     )`);
 
-    // 基础菜谱库 (爬虫抓取)
+    // base_recipes 表，用于本地菜谱库推荐
     db.run(`CREATE TABLE IF NOT EXISTS base_recipes (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -177,8 +177,30 @@ function initDb() {
       ingredients TEXT,
       steps TEXT,
       tags TEXT,
+      cuisine_type TEXT,
+      cooking_methods TEXT,
+      taste_tags TEXT,
+      nutrition_tags TEXT,
+      source TEXT DEFAULT 'scraped',
       createdAt INTEGER
     )`);
+    
+    // 如果表已存在，添加新列（兼容旧数据库）
+    db.run(`ALTER TABLE base_recipes ADD COLUMN cuisine_type TEXT`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加cuisine_type列失败:', err);
+    });
+    db.run(`ALTER TABLE base_recipes ADD COLUMN cooking_methods TEXT`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加cooking_methods列失败:', err);
+    });
+    db.run(`ALTER TABLE base_recipes ADD COLUMN taste_tags TEXT`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加taste_tags列失败:', err);
+    });
+    db.run(`ALTER TABLE base_recipes ADD COLUMN nutrition_tags TEXT`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加nutrition_tags列失败:', err);
+    });
+    db.run(`ALTER TABLE base_recipes ADD COLUMN source TEXT DEFAULT 'scraped'`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加source列失败:', err);
+    });
   });
 }
 
@@ -193,6 +215,57 @@ if (DEEPSEEK_API_KEY) {
 } else {
     console.warn("DeepSeek API Key NOT found in environment variables.");
 }
+
+// 辅助函数：使用AI提取菜品标签
+async function extractRecipeTags(dishName, ingredients) {
+  const ingredientNames = ingredients.map(i => (typeof i === 'object' ? i.name : i)).join('、');
+  const prompt = `分析菜品"${dishName}"（食材：${ingredientNames}），以JSON格式返回：
+{
+  "cuisine_type": "菜系（如：川菜、粤菜、湘菜、家常菜等）",
+  "cooking_methods": ["烹饪方法数组（如：炒、蒸、煮、炖、烤、炸等）"],
+  "taste_tags": ["口味标签数组（如：辣、咸、鲜、甜、酸、麻等）"],
+  "nutrition_tags": ["营养标签数组（如：高蛋白、低脂、富含维生素、补钙等）"]
+}
+
+只返回JSON，不要其他内容。`;
+
+  try {
+    const response = await fetch(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是一个专业的美食分析师，擅长分析菜品属性。' },
+          { role: 'user', content: prompt }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.3
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`AI API调用失败: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0].message.content;
+    return JSON.parse(content);
+  } catch (err) {
+    console.error('标签提取失败:', err.message);
+    // 返回默认值
+    return {
+      cuisine_type: '中餐',
+      cooking_methods: [],
+      taste_tags: [],
+      nutrition_tags: []
+    };
+  }
+}
+
 
 // AI 代理路由
 app.post('/api/ai/chat', async (req, res) => {
@@ -548,6 +621,70 @@ app.post('/api/recipes', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ id: this.lastID });
   });
+});
+
+// 保存AI生成的菜谱到base_recipes（用于后续推荐）
+app.post('/api/base-recipes', async (req, res) => {
+  try {
+    const { dishes } = req.body;
+    
+    if (!dishes || !Array.isArray(dishes)) {
+      return res.status(400).json({ error: '缺少dishes数组' });
+    }
+
+    let savedCount = 0;
+    const errors = [];
+
+    for (const dish of dishes) {
+      try {
+        // 1. 使用AI提取标签
+        console.log(`[Base Recipes] 正在为"${dish.name}"提取标签...`);
+        const tags = await extractRecipeTags(dish.name, dish.ingredients);
+        
+        // 2. 准备插入数据
+        const id = crypto.randomUUID();
+        const sql = `INSERT OR IGNORE INTO base_recipes 
+          (id, title, ingredients, steps, tags, cuisine_type, cooking_methods, taste_tags, nutrition_tags, source, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_generated', ?)`;
+
+        const params = [
+          id,
+          dish.name,
+          JSON.stringify(dish.ingredients),
+          JSON.stringify(dish.instructions),
+          JSON.stringify([]),  // 通用tags留空
+          tags.cuisine_type,
+          JSON.stringify(tags.cooking_methods),
+          JSON.stringify(tags.taste_tags),
+          JSON.stringify(tags.nutrition_tags),
+          Date.now()
+        ];
+
+        await new Promise((resolve, reject) => {
+          db.run(sql, params, function(err) {
+            if (err) reject(err);
+            else resolve(this.changes);
+          });
+        });
+
+        console.log(`[Base Recipes] ✅ "${dish.name}" 保存成功 (${tags.cuisine_type})`);
+        savedCount++;
+      } catch (err) {
+        console.error(`[Base Recipes] ❌ 保存"${dish.name}"失败:`, err.message);
+        errors.push({ dish: dish.name, error: err.message });
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      savedCount, 
+      totalDishes: dishes.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (err) {
+    console.error('[Base Recipes] 保存失败:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 获取历史记录
