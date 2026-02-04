@@ -13,6 +13,7 @@ export interface RecipeStep {
 }
 
 export interface Dish {
+  id?: string;
   name: string;
   ingredients: Ingredient[];
   instructions: RecipeStep[];

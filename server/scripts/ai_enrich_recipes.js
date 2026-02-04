@@ -113,20 +113,26 @@ async function enrichRecipes() {
   console.log(`预计费用: ¥${(needEnrich.length * 0.003).toFixed(2)} 元\n`);
   
   // 3. 确认是否继续
-  const readline = await import('readline');
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+  const autoConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
   
-  const answer = await new Promise((resolve) => {
-    rl.question('是否继续？(y/N): ', resolve);
-  });
-  rl.close();
-  
-  if (answer.toLowerCase() !== 'y') {
-    console.log('❌ 已取消');
-    return;
+  if (!autoConfirm) {
+    const readline = await import('readline');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
+    const answer = await new Promise((resolve) => {
+      rl.question('是否继续？(y/N): ', resolve);
+    });
+    rl.close();
+    
+    if (answer.toLowerCase() !== 'y') {
+      console.log('❌ 已取消');
+      return;
+    }
+  } else {
+    console.log('⏩ 检测到 --yes 参数，已自动确认继续...\n');
   }
   
   // 4. 批量标注

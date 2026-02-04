@@ -203,7 +203,7 @@ const App: React.FC = () => {
 
   const handleRecommend = async () => {
     setIsRecommendationMode(true);
-    setSessionDisliked([]);
+    // 不再清空 sessionDisliked，保留之前排除的菜品
     setLoading(true);
     setError(null);
     setCurrentRecipe(null);
@@ -214,6 +214,11 @@ const App: React.FC = () => {
       const recipe = await apiService.getRecommendation('peter_yong', prefs.diners, excludeIds);
       setCurrentRecipe(recipe);
       setIsNewRecipe(true);
+      
+      // 推荐成功后，将新推荐的菜品ID和其所有单菜ID都加入排除列表
+      const dishIds = recipe.dishes.map(d => d.id).filter(Boolean) as string[];
+      const newDisliked = [...new Set([...sessionDisliked, recipe.id, ...dishIds])];
+      setSessionDisliked(newDisliked);
     } catch (err: any) {
       console.error('推荐失败:', err);
       setError(`推荐失败：${err.message}。请确保后端服务已启动且有足够的基础菜谱数据。`);
@@ -251,8 +256,9 @@ const App: React.FC = () => {
         // 1. 记录用户反馈（触发权重更新）
         await apiService.recordFeedback('peter_yong', currentRecipe.id, 'dislike', currentRecipe);
         
-        // 2. 添加到会话排除列表
-        const newDisliked = [...sessionDisliked, currentRecipe.id];
+        // 2. 添加到会话排除列表（不仅排除整体 ID，还要排除该套餐内的具体单菜 ID）
+        const dishIds = currentRecipe.dishes.map(d => d.id).filter(Boolean) as string[];
+        const newDisliked = [...new Set([...sessionDisliked, currentRecipe.id, ...dishIds])];
         setSessionDisliked(newDisliked);
         
         // 3. 重新推荐
@@ -324,7 +330,7 @@ const App: React.FC = () => {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-[#F4D03F] flex items-center justify-center p-6 font-mono selection:bg-black selection:text-[#F4D03F]">
+      <div className="fixed inset-0 min-h-screen bg-[#F4D03F] flex items-center justify-center p-6 font-mono selection:bg-black selection:text-[#F4D03F] z-50 overflow-auto">
         <div className="w-full max-w-md animate-in zoom-in duration-500">
           <NeoCard color="bg-white" className="p-12 border-[8px]">
             <div className="text-center space-y-8">

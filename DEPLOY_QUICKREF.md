@@ -16,4 +16,7 @@ docker compose up -d
 
 
 # 给菜谱打标签（AI 分析）
+# 方式 A：交互运行（需保持窗口开启）
 docker compose exec caipincheck npm run db:enrich
+# 方式 B：后台运行（运行后可关闭窗口）
+docker compose exec -d caipincheck node server/scripts/ai_enrich_recipes.js --yes

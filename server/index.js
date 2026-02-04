@@ -24,6 +24,115 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// 辅助函数：生成丰富的营养信息说明
+function generateNutritionInfo(selectedRecipes, diners) {
+  const dishNames = selectedRecipes.map(r => r.title);
+  
+  // 分析菜系
+  const cuisines = selectedRecipes.map(r => r.cuisine_type || '').filter(c => c);
+  const uniqueCuisines = [...new Set(cuisines.map(c => c.split('(')[0].trim().replace('中餐', '').trim()))].filter(c => c);
+  
+  // 分析烹饪方法
+  const allCookingMethods = selectedRecipes.flatMap(r => 
+    r.cooking_methods ? JSON.parse(r.cooking_methods) : []
+  );
+  const uniqueMethods = [...new Set(allCookingMethods)];
+  
+  // 分析口味标签
+  const allTasteTags = selectedRecipes.flatMap(r => 
+    r.taste_tags ? JSON.parse(r.taste_tags) : []
+  );
+  const uniqueTastes = [...new Set(allTasteTags)];
+  
+  // 分析营养标签
+  const allNutritionTags = selectedRecipes.flatMap(r => 
+    r.nutrition_tags ? JSON.parse(r.nutrition_tags) : []
+  );
+  const uniqueNutrition = [...new Set(allNutritionTags)];
+  
+  // 分析食材种类
+  const allIngredients = selectedRecipes.flatMap(r => {
+    const ings = r.ingredients ? JSON.parse(r.ingredients) : [];
+    return ings.slice(0, 3).map(ing => typeof ing === 'object' ? ing.name : ing);
+  });
+  const uniqueIngredients = [...new Set(allIngredients)];
+  
+  // 检查是否有汤
+  const hasSoup = selectedRecipes.some(r => 
+    (r.title + (r.tags || '')).toLowerCase().match(/汤|羹|粥/)
+  );
+  
+  // 检查荤素搭配
+  const meatRegex = /肉|鸡|鸭|鱼|虾|牛|羊|猪|腿|翅|排骨|肚|肠|肺/;
+  const hasMeat = selectedRecipes.some(r => meatRegex.test(r.title) && !(r.tags && r.tags.includes('素菜')));
+  const hasVeggie = selectedRecipes.some(r => r.tags && (r.tags.includes('素菜') || r.title.match(/豆腐|青菜|白菜|菠菜|芹菜|茄子|土豆/)));
+  
+  // 构建营养信息说明（分段落）
+  let parts = [];
+  
+  // 第一部分：搭配逻辑
+  if (selectedRecipes.length > 1) {
+    let pairingLogic = `🎯 **搭配逻辑**：`;
+    
+    if (hasMeat && hasVeggie) {
+      pairingLogic += `荤素均衡，营养全面`;
+    } else if (hasMeat) {
+      pairingLogic += `以荤菜为主，富含蛋白质`;
+    } else {
+      pairingLogic += `清爽素食，健康低脂`;
+    }
+    
+    if (hasSoup) {
+      pairingLogic += `，配有汤羹滋润养胃`;
+    }
+    
+    if (uniqueMethods.length > 1) {
+      pairingLogic += `。烹饪方式多样（${uniqueMethods.slice(0, 3).join('、')}），口感层次丰富`;
+    }
+    
+    parts.push(pairingLogic);
+  }
+  
+  // 第二部分：营养价值
+  let nutritionValue = `💊 **营养价值**：`;
+  
+  if (uniqueNutrition.length > 0) {
+    nutritionValue += uniqueNutrition.slice(0, 4).join('、');
+  } else {
+    // 如果没有营养标签，根据食材推测
+    const nutritionBenefits = [];
+    if (uniqueIngredients.some(i => i.match(/鱼|虾|鸡|肉/))) nutritionBenefits.push('富含优质蛋白');
+    if (uniqueIngredients.some(i => i.match(/豆腐|豆|菌|菇/))) nutritionBenefits.push('植物蛋白丰富');
+    if (uniqueIngredients.some(i => i.match(/青菜|白菜|芹菜|菠菜|萝卜|西兰花/))) nutritionBenefits.push('膳食纤维充足');
+    if (uniqueIngredients.some(i => i.match(/西红柿|胡萝卜|南瓜|红薯/))) nutritionBenefits.push('维生素丰富');
+    
+    nutritionValue += nutritionBenefits.length > 0 
+      ? nutritionBenefits.slice(0, 3).join('、') 
+      : '营养均衡，适合日常食用';
+  }
+  
+  parts.push(nutritionValue);
+  
+  // 第三部分：口味特色
+  if (uniqueTastes.length > 0) {
+    parts.push(`👅 **口味特色**：${uniqueTastes.slice(0, 3).join('、')}风味`);
+  }
+  
+  // 第四部分：适合人群
+  let suitableFor = `👨‍👩‍👧‍👦 **适合**：`;
+  if (diners >= 4) {
+    suitableFor += `${diners}人家庭聚餐，分量充足`;
+  } else if (diners >= 2) {
+    suitableFor += `${diners}人用餐，量足且不浪费`;
+  } else {
+    suitableFor += `单人享用，简单便捷`;
+  }
+  parts.push(suitableFor);
+  
+  return parts.join('\n\n');
+}
+
+
 // 初始化数据库
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
@@ -336,11 +445,13 @@ app.post('/api/ai/chat', async (req, res) => {
         const simulatedRecipe = {
           id: crypto.randomUUID(),
           title: selectedRows.length > 1 ? `精选本地套餐：${selectedRows[0].title}等` : selectedRows[0].title,
-          cuisine: "中餐 (本地库优先匹配)",
+          cuisine: selectedRows.length > 1 && selectedRows[0].cuisine_type 
+            ? selectedRows[0].cuisine_type 
+            : "中餐 (本地库优先匹配)",
           dishes: dishes,
           nutritionInfo: preferenceInfo 
-            ? `✅ ${preferenceInfo}\n\n💡 已为您从本地库优先匹配了 ${selectedRows.length} 道符合口味要求的菜品。`
-            : `💡 已为您从本地库优先匹配了 ${selectedRows.length} 道符合口味要求的菜品。`,
+            ? `✅ ${preferenceInfo}\n\n${generateNutritionInfo(selectedRows, diners)}`
+            : generateNutritionInfo(selectedRows, diners),
           tags: Array.from(new Set(selectedRows.flatMap(r => JSON.parse(r.tags || "[]")))),
           diners: diners,
           createdAt: Date.now()
@@ -734,6 +845,7 @@ app.post('/api/recommend', async (req, res) => {
     
     // 8. 转换为前端 Recipe 格式
     const recommendedDishes = selectedRecipes.map(recipe => ({
+      id: recipe.id,
       name: recipe.title,
       ingredients: JSON.parse(recipe.ingredients),
       instructions: JSON.parse(recipe.steps).map((step, idx) => ({
@@ -749,7 +861,7 @@ app.post('/api/recommend', async (req, res) => {
         : selectedRecipes[0].title,
       cuisine: selectedRecipes[0].cuisine_type || '综合菜系',
       dishes: recommendedDishes,
-      nutritionInfo: `💡 根据您的偏好智能推荐 ${selectedRecipes.length} 道菜，已确保食材多样、烹饪方式均衡、营养互补`,
+      nutritionInfo: generateNutritionInfo(selectedRecipes, diners),
       tags: Array.from(new Set(selectedRecipes.flatMap(r => JSON.parse(r.tags || '[]')))),
       diners: diners,
       createdAt: Date.now()
