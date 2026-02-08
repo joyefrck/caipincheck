@@ -29,6 +29,8 @@ const App: React.FC = () => {
   const [savedRecipes, setSavedRecipes] = useState<Recipe[]>([]);
   const [history, setHistory] = useState<Recipe[]>([]);
   const [sessionDisliked, setSessionDisliked] = useState<string[]>([]);
+  const [excludedDishNames, setExcludedDishNames] = useState<string[]>([]);  // 新增：排除的菜名列表
+  const [soulIngredient, setSoulIngredient] = useState<string>('');  // 灵魂料理关键词（用于上下文感知排除）
   const [error, setError] = useState<string | null>(null);
   const [tasteProfile, setTasteProfile] = useState<string>("正在火速收集你的美食基因...");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -165,6 +167,32 @@ const App: React.FC = () => {
     setCurrentRecipe(null);
 
     try {
+      // 1. 尝试从数据库推荐（如果是简单的食材/菜名搜索）
+      const isSimpleKeyword = targetInput.length <= 10 && !targetInput.includes('，') && !targetInput.includes(',');
+      
+      if (isSimpleKeyword) {
+        try {
+          console.log(`🔍 尝试从数据库搜索: ${targetInput}`);
+          setSoulIngredient(targetInput);  // 🆕 记录灵魂料理关键词
+          const recipe = await apiService.getRecommendation(
+            'peter_yong',
+            prefs.diners,
+            [],
+            excludedDishNames,
+            targetInput  // 传递关键词
+          );
+          setCurrentRecipe(recipe);
+          setIsNewRecipe(true);
+          setIsRecommendationMode(true);  // 标记为推荐模式
+          showToast('✨ 从本地菜谱库为您精选！');
+          return;
+        } catch (err: any) {
+          console.warn('数据库推荐失败，降级到AI生成:', err.message);
+          // 继续执行AI生成逻辑
+        }
+      }
+      
+      // 2. 如果数据库没找到，或者是复杂查询，调用AI生成
       if (!customInput) {
         setIsRecommendationMode(false); // Reset if it's a manual search
       }
@@ -181,8 +209,11 @@ const App: React.FC = () => {
         ...recentTitles, 
         ...sessionDisliked, 
         ...(currentTitle ? [currentTitle] : []), 
-        ...extraExcluded
+        ...extraExcluded,
+        ...excludedDishNames  // 新增：加入排除的菜名列表
       ])];
+      
+      console.log('🚫 排除列表:', allExcluded);
       
       const recipe = await generateRecipe(
         targetInput || "大厨绝活推荐",
@@ -202,6 +233,7 @@ const App: React.FC = () => {
   };
 
   const handleRecommend = async () => {
+    setSoulIngredient('');  // 🆕 清除灵魂料理上下文
     setIsRecommendationMode(true);
     // 不再清空 sessionDisliked，保留之前排除的菜品
     setLoading(true);
@@ -210,8 +242,14 @@ const App: React.FC = () => {
 
     try {
       // 调用本地推荐 API 而非 AI 生成
-      const excludeIds = sessionDisliked;
-      const recipe = await apiService.getRecommendation('peter_yong', prefs.diners, excludeIds);
+      const recipe = await apiService.getRecommendation(
+        'peter_yong',
+        prefs.diners,
+        [],
+        excludedDishNames,
+        '',          // keyword为空（不指定搜索关键词）
+        true         // 🆕 randomMode = true（启用随机推荐）
+      );
       setCurrentRecipe(recipe);
       setIsNewRecipe(true);
       
@@ -268,34 +306,42 @@ const App: React.FC = () => {
         // 1. 记录用户反馈（触发权重更新）
         await apiService.recordFeedback('peter_yong', currentRecipe.id, 'dislike', currentRecipe);
         
-        // 2. 添加到会话排除列表（不仅排除整体 ID，还要排除该套餐内的具体单菜 ID）
-        const dishIds = currentRecipe.dishes.map(d => d.id).filter(Boolean) as string[];
-        const newDisliked = [...new Set([...sessionDisliked, currentRecipe.id, ...dishIds])];
-        setSessionDisliked(newDisliked);
+        // 2. 提取所有单菜名称并加入排除列表
+        const dishNames = currentRecipe.dishes.map(d => d.name);
+        const newExcludedNames = [...new Set([...excludedDishNames, ...dishNames])];
+        setExcludedDishNames(newExcludedNames);
+        
+        console.log('🚫 已排除菜品:', newExcludedNames);
         
         // 3. 重新推荐
         if (isRecommendationMode) {
-          // 推荐模式：直接调用推荐 API
+          // 推荐模式：调用后端API（传递菜名列表）
           setLoading(true);
           try {
-            const recipe = await apiService.getRecommendation('peter_yong', prefs.diners, newDisliked);
+            const recipe = await apiService.getRecommendation(
+              'peter_yong', 
+              prefs.diners, 
+              [],  // ID列表留空
+              newExcludedNames,  // 传递菜名列表
+              soulIngredient,  // 🔧 修复：只在有灵魂料理上下文时传递关键词，否则为空（随机推荐）
+              !soulIngredient  // 🆕 没有灵魂料理时使用随机模式
+            );
             setCurrentRecipe(recipe);
             setIsNewRecipe(true);
           } catch (err: any) {
             console.error('推荐失败:', err);
-            setError(`推荐失败：${err.message}`);
+            // 如果是候选池为空的错误，提示用户
+            if (err.message && err.message.includes('没有找到')) {
+              setError('数据库中没有更多符合条件的菜品了，建议：\n1. 点击"蔡大厨，上菜！"尝试随机推荐\n2. 或者搜索其他食材');
+            } else {
+              setError(`推荐失败：${err.message}`);
+            }
           } finally {
             setLoading(false);
           }
         } else {
-          // 自定义搜索模式：重新生成
-          // 不仅排除套餐标题，还要排除所有单菜名称
-          const dishNames = currentRecipe.dishes.map(d => d.name);
-          const allExcludedNames = [
-            ...newDisliked.map(id => history.find(h => h.id === id)?.title || id),
-            ...dishNames
-          ];
-          handleGenerate(allExcludedNames);
+          // 自定义搜索模式：重新生成AI（同样传递菜名和关键词）
+          handleGenerate(newExcludedNames, soulIngredient || input);  // 🆕 传递灵魂料理关键词
         }
       } catch (err) {
         console.error('反馈记录失败:', err);

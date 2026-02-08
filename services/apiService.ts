@@ -84,17 +84,30 @@ export const apiService = {
   },
 
   // 智能推荐菜谱
-  getRecommendation: async (userId: string, diners: number, excludeRecipeIds: string[] = []): Promise<Recipe> => {
+  getRecommendation: async (
+    userId: string,
+    diners: number,
+    excludeRecipeIds: string[] = [],
+    excludeDishNames: string[] = [],
+    keyword: string = '',  // 新增：搜索关键词
+    randomMode: boolean = false  // 🆕 随机推荐模式
+  ): Promise<Recipe> => {
     const response = await fetch(`${API_BASE_URL}/recommend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, diners, excludeRecipeIds }),
+      body: JSON.stringify({
+        userId,
+        diners,
+        excludeRecipeIds,
+        excludeDishNames,
+        keyword,  // 新增
+        randomMode  // 🆕
+      }),
     });
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "智能推荐失败");
+      const error = await response.json();
+      throw new Error(error.message || "推荐失败");
     }
     return response.json();
   },
 };
-

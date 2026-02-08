@@ -809,7 +809,14 @@ app.post('/api/user-feedback', (req, res) => {
 
 // 智能推荐 API
 app.post('/api/recommend', async (req, res) => {
-  const { userId, diners, excludeRecipeIds = [] } = req.body;
+  const { 
+    userId, 
+    diners, 
+    excludeRecipeIds = [],
+    excludeDishNames = [],  // 排除的菜名列表
+    keyword = '',  // 新增：搜索关键词
+    randomMode = false  // 🆕 随机推荐模式（蔡大厨推荐）
+  } = req.body;
   
   if (!userId) {
     return res.status(400).json({ error: '缺少用户 ID' });
@@ -843,76 +850,125 @@ app.post('/api/recommend', async (req, res) => {
     const recentRecipeIds = recentHistory.map(r => r.id);
     const allExcludeIds = [...new Set([...excludeRecipeIds, ...recentRecipeIds])];
     
-    // 3. 从 base_recipes 中查询候选菜谱
+    // 3. 从 base_recipes 中查询候选菜谱（排除指定ID和菜名）
     const targetDishCount = diners >= 3 ? 3 : (diners >= 2 ? 2 : 1);
     const candidates = await new Promise((resolve) => {
       let sql = 'SELECT * FROM base_recipes';
+      let conditions = [];
       let params = [];
       
+      // 排除ID
       if (allExcludeIds.length > 0) {
         const placeholders = allExcludeIds.map(() => '?').join(',');
-        sql += ` WHERE id NOT IN (${placeholders})`;
-        params = allExcludeIds;
+        conditions.push(`id NOT IN (${placeholders})`);
+        params.push(...allExcludeIds);
       }
       
-      db.all(sql, params, (err, rows) => resolve(rows || []));
+      // 排除菜名（新增）
+      if (excludeDishNames.length > 0) {
+        const placeholders = excludeDishNames.map(() => '?').join(',');
+        conditions.push(`title NOT IN (${placeholders})`);
+        params.push(...excludeDishNames);
+      }
+      
+      // 新增：关键词搜索
+      if (keyword) {
+        conditions.push(`(
+          title LIKE ? OR 
+          ingredients LIKE ? OR 
+          tags LIKE ? OR
+          cuisine_type LIKE ?
+        )`);
+        const likePattern = `%${keyword}%`;
+        params.push(likePattern, likePattern, likePattern, likePattern);
+      }
+      
+      if (conditions.length > 0) {
+        sql += ' WHERE ' + conditions.join(' AND ');
+      }
+      
+      console.log(`[Recommend] 关键词: "${keyword}", SQL: ${sql}`);
+      console.log(`[Recommend] 排除了 ${excludeDishNames.length} 道菜:`, excludeDishNames);
+      
+      db.all(sql, params, (err, rows) => {
+        if (err) {
+          console.error('[Recommend] SQL查询失败:', err);
+          resolve([]);
+        } else {
+          console.log(`[Recommend] 候选菜谱数量: ${rows.length}`);
+          resolve(rows || []);
+        }
+      });
     });
     
     if (candidates.length === 0) {
-      return res.status(404).json({ error: '候选菜谱池为空，请添加更多基础菜谱' });
+      return res.status(404).json({ 
+        error: '没有符合条件的菜谱',
+        message: keyword 
+          ? `数据库中没有找到与“${keyword}”相关的菜谱，建议让AI生成！`
+          : '您已经尝试过所有相关菜品了，建议换个食材试试！'
+      });
     }
     
-    // 4. 多维度加权评分
+    // 4. 对候选菜谱评分
     const scoredCandidates = candidates.map(recipe => {
       let score = 0;
-      let scoreDetails = {};
+      const scoreDetails = {};
       
-      // 菜系匹配度
-      if (recipe.cuisine_type) {
-        const cleanCuisine = recipe.cuisine_type.split('(')[0].trim().replace('中餐', '').trim();
-        const cuisineScore = profile.cuisineWeights[cleanCuisine] || profile.cuisineWeights[recipe.cuisine_type];
-        if (cuisineScore) {
-          score += cuisineScore * 2;  // 菜系权重 × 2
-          scoreDetails.cuisine = cuisineScore;
+      if (randomMode) {
+        // 🆕 随机推荐模式：完全随机评分，不依赖用户偏好
+        score = Math.random();
+        scoreDetails.random = true;
+      } else {
+        // 原有逻辑：基于用户画像的多维度评分
+        // 菜系匹配度
+        if (recipe.cuisine_type) {
+          // 尝试清洗菜系名称（去除"料理"、"菜"等后缀）
+          const cleanCuisine = recipe.cuisine_type.replace(/料理|菜$/g, '');
+          const cuisineScore = profile.cuisineWeights[cleanCuisine] || profile.cuisineWeights[recipe.cuisine_type];
+          if (cuisineScore) {
+            score += cuisineScore * 2;  // 菜系权重 × 2
+            scoreDetails.cuisine = cuisineScore;
+          }
         }
+        
+        // 口味匹配度
+        const tasteTags = recipe.taste_tags ? JSON.parse(recipe.taste_tags) : [];
+        tasteTags.forEach(taste => {
+          if (profile.tasteWeights[taste]) {
+            score += profile.tasteWeights[taste] * 1.5;
+            scoreDetails.taste = (scoreDetails.taste || 0) + profile.tasteWeights[taste];
+          }
+        });
+        
+        // 烹饪方法匹配度
+        const cookingMethods = recipe.cooking_methods ? JSON.parse(recipe.cooking_methods) : [];
+        cookingMethods.forEach(method => {
+          if (profile.cookingMethodWeights[method]) {
+            score += profile.cookingMethodWeights[method] * 1.2;
+            scoreDetails.cookingMethod = (scoreDetails.cookingMethod || 0) + profile.cookingMethodWeights[method];
+          }
+        });
+        
+        // 营养标签匹配度
+        const nutritionTags = recipe.nutrition_tags ? JSON.parse(recipe.nutrition_tags) : [];
+        nutritionTags.forEach(nutrition => {
+          if (profile.nutritionWeights[nutrition]) {
+            score += profile.nutritionWeights[nutrition] * 1;
+            scoreDetails.nutrition = (scoreDetails.nutrition || 0) + profile.nutritionWeights[nutrition];
+          }
+        });
+        
+        // 食材匹配度（动态权重）
+        const ingredients = recipe.ingredients ? JSON.parse(recipe.ingredients) : [];
+        ingredients.forEach(ing => {
+          const ingName = typeof ing === 'object' ? ing.name : ing;
+          if (profile.ingredientWeights[ingName]) {
+            score += profile.ingredientWeights[ingName] * 1;
+            scoreDetails.ingredient = (scoreDetails.ingredient || 0) + profile.ingredientWeights[ingName];
+          }
+        });
       }
-      
-      // 口味匹配度
-      const tasteTags = recipe.taste_tags ? JSON.parse(recipe.taste_tags) : [];
-      tasteTags.forEach(taste => {
-        if (profile.tasteWeights[taste]) {
-          score += profile.tasteWeights[taste] * 1.5;
-          scoreDetails.taste = (scoreDetails.taste || 0) + profile.tasteWeights[taste];
-        }
-      });
-      
-      // 烹饪方法匹配度
-      const cookingMethods = recipe.cooking_methods ? JSON.parse(recipe.cooking_methods) : [];
-      cookingMethods.forEach(method => {
-        if (profile.cookingMethodWeights[method]) {
-          score += profile.cookingMethodWeights[method] * 1.2;
-          scoreDetails.cookingMethod = (scoreDetails.cookingMethod || 0) + profile.cookingMethodWeights[method];
-        }
-      });
-      
-      // 营养标签匹配度
-      const nutritionTags = recipe.nutrition_tags ? JSON.parse(recipe.nutrition_tags) : [];
-      nutritionTags.forEach(nutrition => {
-        if (profile.nutritionWeights[nutrition]) {
-          score += profile.nutritionWeights[nutrition] * 1;
-          scoreDetails.nutrition = (scoreDetails.nutrition || 0) + profile.nutritionWeights[nutrition];
-        }
-      });
-      
-      // 食材匹配度（动态权重）
-      const ingredients = recipe.ingredients ? JSON.parse(recipe.ingredients) : [];
-      ingredients.forEach(ing => {
-        const ingName = typeof ing === 'object' ? ing.name : ing;
-        if (profile.ingredientWeights[ingName]) {
-          score += profile.ingredientWeights[ingName] * 1;
-          scoreDetails.ingredient = (scoreDetails.ingredient || 0) + profile.ingredientWeights[ingName];
-        }
-      });
       
       return { recipe, score, scoreDetails };
     });
@@ -996,7 +1052,7 @@ app.post('/api/recommend', async (req, res) => {
       title: selectedRecipes.length > 1 
         ? `蔡大厨精选套餐·${selectedRecipes[0].title}等${selectedRecipes.length}道`
         : selectedRecipes[0].title,
-      cuisine: selectedRecipes[0].cuisine_type || '综合菜系',
+      cuisine: randomMode ? '' : (selectedRecipes[0].cuisine_type || '综合菜系'),  // 🆕 随机模式不显示菜系
       dishes: recommendedDishes,
       nutritionInfo: generateNutritionInfo(selectedRecipes, diners),
       tags: Array.from(new Set(selectedRecipes.flatMap(r => JSON.parse(r.tags || '[]')))),
