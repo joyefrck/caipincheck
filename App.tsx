@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import NeoButton from "./components/NeoButton";
 import NeoCard from "./components/NeoCard";
+import FocusCookingMode from "./components/FocusCookingMode";
 import { generateRecipe, analyzeUserTaste } from "./services/geminiService";
 import { apiService } from "./services/apiService";
 import {
@@ -8,6 +9,7 @@ import {
   UserPreferences,
   CuisineType,
   ChineseSubCuisine,
+  FamilyMember,
 } from "./types";
 import {
   CUISINE_OPTIONS,
@@ -42,7 +44,25 @@ const App: React.FC = () => {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(() => {
+    // 初始依然可以带上本地缓存作为兜底，避免白屏等待
+    const saved = localStorage.getItem(STORAGE_KEYS.FAMILY_MEMBERS);
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [showMemberModal, setShowMemberModal] = useState(false);
+  const [newMember, setNewMember] = useState<Partial<FamilyMember>>({ name: '', preferences: '' });
+  const [focusRecipe, setFocusRecipe] = useState<Recipe | null>(null);
   const PAGE_LIMIT = 20;
+
+  // 监听并保存家庭成员变化（同时保存到云端和本地）
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    localStorage.setItem(STORAGE_KEYS.FAMILY_MEMBERS, JSON.stringify(familyMembers));
+    apiService.saveFamilyMembers('peter_yong', familyMembers).catch(err => {
+      console.error('云端同步家庭成员失败:', err);
+    });
+  }, [familyMembers, isLoggedIn]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -73,6 +93,16 @@ const App: React.FC = () => {
           await Promise.all(parsedLocalHist.map(r => apiService.saveHistory(r)));
           finalHist = parsedLocalHist;
           localStorage.removeItem(STORAGE_KEYS.HISTORY);
+          
+          // 顺带拉取云端家庭成员配置
+          try {
+            const profile = await apiService.getUserProfile('peter_yong');
+            if (profile.familyMembers && Array.isArray(profile.familyMembers)) {
+               setFamilyMembers(profile.familyMembers);
+            }
+          } catch (err) {
+            console.error('拉取云端家人配置失败:', err);
+          }
         }
 
         setSavedRecipes(finalSaved);
@@ -213,10 +243,18 @@ const App: React.FC = () => {
         ...excludedDishNames  // 新增：加入排除的菜名列表
       ])];
       
-      console.log('🚫 排除列表:', allExcluded);
-      
+      // 🆕 获取选中家庭成员的偏好
+      const selectedMembersPrefs = familyMembers
+        .filter(m => selectedMembers.includes(m.id))
+        .map(m => `成员[${m.name}]的偏好/忌口：${m.preferences}`)
+        .join('；');
+
+      const familyContext = selectedMembersPrefs 
+        ? `。特别注意今天以下家人的要求：${selectedMembersPrefs}` 
+        : '';
+        
       const recipe = await generateRecipe(
-        targetInput || "大厨绝活推荐",
+        (targetInput || "大厨绝活推荐") + familyContext,
         customPrefs || prefs,
         allExcluded,
         tasteProfile,
@@ -392,51 +430,51 @@ const App: React.FC = () => {
 
   if (!isLoggedIn) {
     return (
-      <div className="fixed inset-0 min-h-screen bg-[#F4D03F] flex items-center justify-center p-6 font-mono selection:bg-black selection:text-[#F4D03F] z-50 overflow-auto">
+      <div className="fixed inset-0 min-h-screen bg-[#FFFBF0] flex items-center justify-center p-6 font-sans selection:bg-[#FF8A65] selection:text-white z-50 overflow-auto">
         <div className="w-full max-w-md animate-in zoom-in duration-500">
-          <NeoCard color="bg-white" className="p-12 border-[8px]">
-            <div className="text-center space-y-8">
-              <div className="inline-block bg-black text-white px-4 py-2 font-black text-4xl transform -rotate-2 border-4 border-black mb-4">
-                STOP！🛑
+          <NeoCard color="bg-white" className="p-10">
+            <div className="text-center space-y-6">
+              <div className="inline-block bg-[#FFB74D] text-[#4E342E] px-5 py-2 rounded-full font-bold text-lg mb-2 shadow-sm">
+                🏠 欢迎回厨房
               </div>
-              <h1 className="text-3xl font-black leading-tight uppercase tracking-tighter">
-                蔡大厨的私人后厨<br/>
-                <span className="text-[#FF5722] underline decoration-8">PRIVATE KITCHEN</span>
+              <h1 className="text-3xl font-extrabold text-[#4E342E] leading-tight tracking-tight">
+                今天想为家人<br/>
+                <span className="text-[#FF8A65]">做点什么？</span>
               </h1>
               
-              <div className="space-y-4">
-                <p className="font-black text-lg underline">请输入准入暗语以开动：</p>
+              <div className="space-y-4 pt-4">
+                <p className="font-semibold text-[#6D4C41] text-sm">请输入您的专属主厨昵称：</p>
                 <input
                   type="text"
                   value={loginInput}
                   onChange={(e) => setLoginInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                  placeholder="在此输入暗号..."
-                  className={`w-full border-[6px] border-black p-4 text-2xl font-black bg-yellow-50 outline-none transition-all ${
-                    loginError ? 'bg-red-200 translate-x-1' : 'focus:bg-white focus:-translate-y-1 focus:shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]'
+                  placeholder="例如：米其林大厨"
+                  className={`w-full hand-drawn-input p-4 text-xl font-bold bg-[#FFF8E1] text-center ${
+                    loginError ? 'border-red-400 bg-red-50 translate-x-1' : ''
                   }`}
                 />
-                {loginError && (
-                  <p className="text-red-600 font-black text-sm italic animate-bounce">
-                    🚫 暗号不对，大厨拒绝上菜！
-                  </p>
-                )}
+                <div className="h-6">
+                  {loginError && (
+                    <p className="text-red-500 font-bold text-sm animate-bounce">
+                      提示：昵称不对，检查一下哦！
+                    </p>
+                  )}
+                </div>
               </div>
 
               <NeoButton
-                variant="primary"
-                className="w-full text-2xl py-6"
+                variant="orange"
+                className="w-full text-xl py-4 mt-2"
                 onClick={handleLogin}
               >
-                立即开饭 →
+                系上围裙，开始！🍲
               </NeoButton>
-              
-              <p className="text-[10px] font-black opacity-30 pt-4 uppercase">
-                AUTHENTICATION REQUIRED • NO PASS NO FOOD • TRUST THE CHEF
-              </p>
             </div>
           </NeoCard>
-          
+          <p className="text-center mt-6 text-[#A1887F] text-xs font-semibold tracking-wider">
+            ♡ 为爱下厨 / MADE WITH LOVE ♡
+          </p>
         </div>
       </div>
     );
@@ -448,177 +486,220 @@ const App: React.FC = () => {
       <div className="absolute top-4 right-4 md:top-8 md:right-8 z-10">
         <button
           onClick={handleLogout}
-          className="bg-[#FF1744] text-white border-4 border-black px-4 py-2 font-black text-sm uppercase tracking-widest neo-shadow-sm hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-none transition-all"
+          className="bg-white/80 backdrop-blur text-[#8D6E63] border-2 border-orange-100/50 px-4 py-2 rounded-full font-bold text-sm shadow-sm hover:bg-white hover:shadow transition-all flex items-center gap-2"
         >
-          在下告退
+          <span>🚪</span> 退出厨房
         </button>
       </div>
 
       <header className="flex flex-col md:flex-row items-center justify-between gap-8 pt-4">
         <div
-          className="relative cursor-pointer"
+          className="relative cursor-pointer group"
           onClick={() => setActiveTab("generate")}
         >
-          <div className="flex flex-col items-center md:items-start">
-            <div className="flex items-center gap-3">
-              <h1 className="text-5xl md:text-8xl font-black bg-[#FF5722] text-white inline-block p-4 border-[8px] border-black neo-shadow-lg transform -rotate-2 hover:rotate-0 transition-all">
-                今天吃什么呢
-              </h1>
-            </div>
-            <div className="mt-4 bg-[#FFEB3B] border-4 border-black px-4 py-2 neo-shadow font-black text-sm md:text-lg flex items-center gap-2">
-              <span className="star">★</span>{" "}
+          <div className="flex flex-col items-center md:items-start text-center md:text-left">
+            <h1 className="text-4xl md:text-5xl font-extrabold text-[#4E342E] tracking-tight mb-2 group-hover:text-[#D84315] transition-colors">
+              👨‍👩‍👧‍👦 我们的家庭餐桌
+            </h1>
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-orange-50 border border-orange-100 rounded-full text-[#E65100] font-bold text-sm shadow-sm">
+              <span className="star">✨</span>{" "}
               {isAnalyzing
-                ? "正在同步味蕾数据..."
-                : `美食人格：${tasteProfile}`}
+                ? "正在整理家人的口味偏好..."
+                : `偏好记忆：${tasteProfile}`}
             </div>
           </div>
         </div>
 
-        <nav className="flex border-[6px] border-black neo-shadow-lg bg-white rounded-2xl">
+        <nav className="flex p-1 bg-white border border-gray-100 shadow-sm rounded-2xl">
           <button
             onClick={() => setActiveTab("generate")}
-            className={`px-10 py-5 font-black text-xl uppercase tracking-tighter transition-all whitespace-nowrap rounded-l-[10px] ${activeTab === "generate" ? "bg-[#4CAF50] text-white underline underline-offset-8 decoration-4" : "hover:bg-gray-100"}`}
+            className={`px-6 py-3 font-bold text-lg transition-all rounded-xl ${
+              activeTab === "generate" 
+                ? "bg-[#FFB74D] text-[#4E342E] shadow-sm" 
+                : "text-gray-500 hover:text-[#4E342E] hover:bg-orange-50"
+            }`}
           >
-            去探险
+            💡 发现灵感
           </button>
           <button
             onClick={() => { setActiveTab('cookbook'); setViewingSavedRecipe(null); }}
-            className={`px-10 py-5 font-black text-xl uppercase tracking-tighter transition-all border-l-[6px] border-black whitespace-nowrap rounded-r-[10px] ${activeTab === 'cookbook' ? 'bg-[#9C27B0] text-white underline underline-offset-8 decoration-4' : 'hover:bg-gray-100'}`}
+            className={`px-6 py-3 font-bold text-lg transition-all rounded-xl ${
+              activeTab === 'cookbook' 
+                ? "bg-[#81C784] text-white shadow-sm" 
+                : "text-gray-500 hover:text-[#4E342E] hover:bg-green-50"
+            }`}
           >
-            我的地盘
+            📖 家庭菜单本
           </button>
         </nav>
       </header>
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed top-10 left-1/2 transform -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
-          <div className="bg-[#00E676] border-[4px] border-black px-8 py-4 neo-shadow-lg font-black text-xl flex items-center gap-3">
-             <span className="text-2xl">✨</span> {toast}
+        <div className="fixed top-10 left-1/2 transform -translate-x-1/2 z-[999] animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="bg-[#E8F5E9] text-[#2E7D32] border border-[#81C784] px-6 py-3 rounded-2xl shadow-lg font-bold text-lg flex items-center gap-3">
+             <span className="text-xl">✨</span> {toast}
           </div>
         </div>
       )}
 
       {activeTab === 'generate' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 animate-in fade-in zoom-in-95 duration-500">
-          <div className="lg:col-span-4 space-y-10">
-            {/* Recommendation Card with Marquee */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in zoom-in-95 duration-500">
+          <div className="lg:col-span-5 space-y-6">
+            {/* Recommendation Card */}
             <NeoCard
-              title="蔡大厨推荐"
-              color="bg-[#9C27B0] text-white"
+              title="👨‍🍳 主厨今日特供"
+              color="bg-white"
               hasMarquee={true}
-              className="border-pink-300"
             >
-              <div className="space-y-4 pt-4">
-                <p className="font-black text-lg leading-tight italic">
-                  今日盲盒：【{recommendationBase.cuisine}{recommendationBase.subCuisine !== '不限' ? `·${recommendationBase.subCuisine}` : ''}】！蔡大厨已就位，准备好迎接惊喜了吗？
+              <div className="space-y-4 pt-2">
+                <p className="font-semibold text-[#6D4C41] text-lg leading-relaxed">
+                  不知道吃什么？今天我为您随机准备了一份【<span className="text-[#FF8A65] font-bold">主厨精选</span>】搭配，保证家人喜欢！
                 </p>
-                <div className="flex gap-2 flex-wrap">
-                  <span className="text-xs font-black uppercase text-black bg-[#00E676] px-2 py-1 border-2 border-black rotate-2">
-                    一周不重样
+                <div className="flex gap-2 flex-wrap mb-2">
+                  <span className="text-xs font-bold text-[#2E7D32] bg-[#E8F5E9] px-3 py-1 rounded-full border border-[#81C784]">
+                    🌱 一周不重样
                   </span>
-                  <span className="text-xs font-black uppercase text-white bg-[#FF5722] px-2 py-1 border-2 border-black -rotate-2">
-                    主厨严选
+                  <span className="text-xs font-bold text-[#E65100] bg-[#FFF3E0] px-3 py-1 rounded-full border border-[#FFB74D]">
+                    ⭐ 精选搭配
                   </span>
                 </div>
                 <NeoButton
                   onClick={handleRecommend}
-                  variant="primary"
-                  className="w-full text-black hover:scale-105"
+                  variant="orange"
+                  className="w-full text-white"
                   disabled={loading}
                 >
-                  {loading ? "锅铲冒烟了..." : "蔡大厨，上菜！ →"}
+                  {loading ? "正在准备食材..." : "就吃这个，上菜！ ✨"}
                 </NeoButton>
               </div>
             </NeoCard>
 
-            <NeoCard title="定制私人晚餐" color="bg-[#4CAF50] text-white">
-              <div className="space-y-6">
-                <div>
-                  <label className="block font-black text-xl mb-2 text-yellow-300 drop-shadow-md">告诉我你想吃什么：</label>
-                  <textarea 
-                    rows={3}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="例如：猪肉，希望能做成超辣的川菜风格..."
-                    className="w-full hand-drawn-input p-4 font-black text-black text-lg bg-white focus:outline-none resize-none"
-                  />
-                  <p className="mt-2 text-white/70 text-xs font-black italic">提示：你可以直接输入“五花肉，微甜，粤菜”</p>
+            <NeoCard title="📝 今天吃什么自己定" color="bg-white">
+              <div className="space-y-5">
+                {/* 场景与快捷食材区 */}
+                <div className="space-y-3 pb-4 border-b border-orange-100">
+                  <div>
+                    <span className="text-sm font-bold text-[#8D6E63] block mb-2">🎈 快速场景：</span>
+                    <div className="flex flex-wrap gap-2">
+                      {['超快手10分钟', '儿童长高餐', '清淡养胃', '下酒好菜', '减脂低卡'].map((tag) => (
+                        <button
+                          key={tag}
+                          onClick={() => setInput(prev => `${tag} `)}
+                          className="px-3 py-1 text-sm bg-orange-50 text-[#E65100] border border-orange-200 rounded-full hover:bg-orange-100 transition-colors"
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm font-bold text-[#8D6E63] block mb-2">🥬 帮我清冰箱：</span>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        {icon: '🐔', name: '鸡肉'}, {icon: '🥩', name: '牛肉'}, {icon: '🐟', name: '鱼虾'},
+                        {icon: '🥔', name: '土豆'}, {icon: '🍅', name: '番茄'}, {icon: '🥬', name: '青草菜'},
+                        {icon: '🥚', name: '鸡蛋'}, {icon: '🍄', name: '菌菇'}, {icon: '🍜', name: '面条'}
+                      ].map((item) => (
+                        <button
+                          key={item.name}
+                          onClick={() => setInput(prev => `${prev} ${item.name}`.trim())}
+                          className="px-2 py-1.5 text-sm bg-gray-50 text-gray-700 border border-gray-200 rounded-xl hover:bg-orange-50 hover:border-orange-200 hover:text-orange-700 transition-all flex items-center gap-1"
+                        >
+                          <span>{item.icon}</span>
+                          <span>{item.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-6 bg-black/10 p-4 border-4 border-black/20 rounded-xl">
-                  <label className="font-black text-xl whitespace-nowrap">吃饭人数：</label>
-                  <input 
-                    type="number" min="1" max="10"
-                    value={prefs.diners}
-                    onChange={(e) => setPrefs({...prefs, diners: parseInt(e.target.value) || 1})}
-                    className="w-32 hand-drawn-input p-3 font-black text-black bg-white text-center text-2xl"
+                <div>
+                  <label className="block font-bold text-[#6D4C41] mb-2">或者告诉主厨你的具体要求：</label>
+                  <textarea 
+                    rows={2}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="例如：稍微有点辣的川菜，或者把以上标签组合..."
+                    className="w-full hand-drawn-input p-3 font-semibold text-[#4E342E] bg-[#FFFBF0] focus:outline-none resize-none"
                   />
+                </div>
+
+                {/* 家庭成员与人数配置区 */}
+                <div className="flex flex-col gap-4 bg-orange-50/50 p-4 rounded-2xl border border-orange-100">
+                  {/* 家人选择 */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-[#6D4C41]">👨‍👩‍👧 今天谁在家吃饭：</span>
+                      <button onClick={() => setShowMemberModal(true)} className="text-xs font-bold text-[#FF8A65] underline hover:text-[#D84315]">管理家人口味</button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {familyMembers.map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => setSelectedMembers(prev => prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id])}
+                          className={`px-3 py-1.5 text-sm rounded-full font-bold transition-all border ${selectedMembers.includes(m.id) ? 'bg-[#FF8A65] text-white border-[#FF8A65] shadow-sm' : 'bg-white text-[#8D6E63] border-orange-200 hover:bg-orange-50'}`}
+                        >
+                          {m.name}
+                        </button>
+                      ))}
+                      {familyMembers.length === 0 && <span className="text-xs text-gray-400 mt-1">尚未添加家庭成员</span>}
+                    </div>
+                  </div>
+                  
+                  {/* 人数调整 */}
+                  <div className="flex items-center gap-4 pt-3 border-t border-orange-100/50">
+                    <label className="font-bold text-[#6D4C41] whitespace-nowrap">🍲 预计菜量（人数）：</label>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setPrefs({...prefs, diners: Math.max(1, prefs.diners - 1)})} className="w-8 h-8 rounded-full bg-white border border-gray-200 text-gray-500 hover:bg-orange-50 font-bold">-</button>
+                      <span className="w-8 text-center font-bold text-xl text-[#E65100]">{prefs.diners}</span>
+                      <button onClick={() => setPrefs({...prefs, diners: Math.min(10, prefs.diners + 1)})} className="w-8 h-8 rounded-full bg-white border border-gray-200 text-gray-500 hover:bg-orange-50 font-bold">+</button>
+                    </div>
+                  </div>
                 </div>
 
                 <NeoButton
                   onClick={() => { handleGenerate([]); }}
                   disabled={loading || (!input && activeTab === "generate")}
-                  variant="orange"
-                  className="w-full mt-4 whitespace-nowrap"
+                  variant="primary"
+                  className="w-full mt-2"
                   size="lg"
                 >
-                  {loading ? "正在创作中..." : "注入灵魂料理！ 🔥"}
+                  {loading ? "搭配中..." : "为您定制菜单 🪄"}
                 </NeoButton>
               </div>
             </NeoCard>
           </div>
 
-          <div className="lg:col-span-8">
+          <div className="lg:col-span-7">
             {error && (
               <NeoCard
-                color="bg-[#FF1744]"
-                className="mb-6 text-white font-black animate-bounce"
+                color="bg-red-50"
+                className="mb-6 text-red-600 font-bold border-red-200"
               >
                 {error}
               </NeoCard>
             )}
 
             {loading && (
-              <div className="h-[500px] flex flex-col items-center justify-center space-y-8 bg-white/20 border-[8px] border-black rounded-3xl neo-shadow-lg">
+              <div className="h-[400px] flex flex-col items-center justify-center space-y-8 bg-white/50 border-2 border-dashed border-orange-200 rounded-3xl neo-shadow-lg">
                 <div className="relative">
-                  <div className="absolute -top-16 left-4 animate-sizzle text-5xl">
-                    🔥
-                  </div>
-                  <div
-                    className="absolute -top-24 left-16 animate-sizzle text-5xl"
-                    style={{ animationDelay: "0.2s" }}
-                  >
-                    ♨️
-                  </div>
-                  <div
-                    className="absolute -top-20 left-28 animate-sizzle text-5xl"
-                    style={{ animationDelay: "0.4s" }}
-                  >
-                    🌶️
-                  </div>
-                  <div
-                    className="absolute -top-28 left-40 animate-sizzle text-5xl"
-                    style={{ animationDelay: "0.1s" }}
-                  >
-                    🥦
-                  </div>
+                  <div className="absolute -top-12 left-2 animate-sizzle text-4xl">✨</div>
+                  <div className="absolute -top-20 left-12 animate-sizzle text-4xl" style={{ animationDelay: "0.2s" }}>♨️</div>
+                  <div className="absolute -top-16 left-24 animate-sizzle text-4xl" style={{ animationDelay: "0.4s" }}>🥕</div>
+                  <div className="absolute -top-24 left-32 animate-sizzle text-4xl" style={{ animationDelay: "0.1s" }}>🥦</div>
 
-                  <div className="flex items-center gap-6">
-                    <div className="text-[120px] transform -scale-x-100 hover:rotate-12 transition-transform">
-                      👨‍🍳
-                    </div>
-                    <div className="text-[120px] animate-fry origin-bottom drop-shadow-2xl">
-                      🍳
-                    </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-[80px] hover:rotate-6 transition-transform">👩‍🍳</div>
+                    <div className="text-[80px] animate-fry origin-bottom drop-shadow-lg">🥘</div>
                   </div>
                 </div>
-                <div className="text-center space-y-4">
-                  <p className="text-5xl font-black tracking-tighter text-black uppercase italic">
-                    蔡大厨疯狂颠勺中...
+                <div className="text-center space-y-3">
+                  <p className="text-2xl font-bold text-[#6D4C41] tracking-wide">
+                    稍等，正在搭配最棒的家庭晚餐...
                   </p>
-                  <p className="text-2xl font-black bg-black text-yellow-400 px-6 py-2 border-4 border-black inline-block rotate-1">
-                    “这一口，能让你看到星辰大海！”
+                  <p className="text-sm font-semibold text-orange-600 bg-orange-50 px-4 py-1.5 rounded-full inline-block">
+                    “好饭不怕晚，美味即将出锅！”
                   </p>
                 </div>
               </div>
@@ -628,39 +709,39 @@ const App: React.FC = () => {
               !currentRecipe &&
               !error &&
               activeTab === "generate" && (
-                <div className="h-full flex items-center justify-center p-12 border-[8px] border-dashed border-black/30 rounded-3xl bg-white/30">
+                <div className="h-full min-h-[400px] flex items-center justify-center p-12 border-2 border-dashed border-gray-300 rounded-3xl bg-white/30">
                   <div className="text-center">
-                    <div className="text-[140px] mb-8 animate-pulse grayscale">
-                      🥘
+                    <div className="text-[100px] mb-6 animate-pulse opacity-40 grayscale">
+                      🍽️
                     </div>
-                    <p className="text-3xl font-black text-black opacity-60 uppercase tracking-tighter leading-tight italic">
-                      美食的大门尚未开启...
+                    <p className="text-xl font-bold text-gray-400 tracking-wide leading-relaxed">
+                      餐桌还空空如也...
                       <br />
-                      输入你的渴望，或者接受蔡大厨的挑战！
+                      <span className="text-sm font-normal">点击左侧按钮，或者告诉我今天想吃什么吧！</span>
                     </p>
                   </div>
                 </div>
               )}
 
             {currentRecipe && (
-              <div className="space-y-8 animate-in slide-in-from-bottom-12 duration-700">
+              <div className="space-y-6 animate-in slide-in-from-bottom-12 duration-700">
                 <NeoCard color="bg-white">
-                  <div className="flex flex-col md:flex-row justify-between items-start gap-6 mb-10 border-b-[8px] border-black pb-8">
+                  <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-6 border-b-2 border-orange-100 pb-6">
                     <div>
-                      <h2 className="text-4xl md:text-6xl font-black underline decoration-[#FF5722] decoration-[12px] underline-offset-8 mb-4">
+                      <h2 className="text-3xl md:text-4xl font-extrabold text-[#4E342E] mb-3">
                         {currentRecipe.title}
                       </h2>
-                      <div className="flex flex-wrap gap-3">
-                        <span className="bg-black text-white px-4 py-2 text-sm md:px-6 md:py-4 md:text-2xl lg:text-xl font-black uppercase tracking-tight rotate-2">
+                      <div className="flex flex-wrap gap-2">
+                        <span className="bg-[#FFB74D] text-[#4E342E] px-3 py-1 rounded-full text-sm font-bold shadow-sm">
                           {currentRecipe.cuisine}
                         </span>
-                        <span className="bg-[#4CAF50] border-4 border-black px-4 py-2 text-sm font-black text-white -rotate-1">
-                          {currentRecipe.diners} 人战斗套餐
+                        <span className="bg-[#81C784] text-white px-3 py-1 rounded-full text-sm font-bold shadow-sm">
+                          👨‍👩‍👧‍👦 {currentRecipe.diners} 人份
                         </span>
                         {currentRecipe.tags.map((tag) => (
                           <span
                             key={tag}
-                            className="border-4 border-black px-4 py-2 text-sm font-black bg-yellow-200 italic hover:scale-110 transition-transform"
+                            className="bg-orange-50 text-[#E65100] border border-orange-100 px-3 py-1 rounded-full text-sm font-bold"
                           >
                             #{tag}
                           </span>
@@ -668,69 +749,128 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     {isNewRecipe && (
-                      <div className="flex flex-col gap-3 w-full md:w-auto">
+                      <div className="flex flex-col gap-3 w-full md:w-auto min-w-[140px]">
                         <NeoButton
                           variant="success"
-                          className="w-full text-black"
+                          className="w-full text-white !py-2 !text-base"
                           onClick={handleLike}
                         >
-                          完美！我要开饭了
+                          ❤️ 加入家庭菜单
                         </NeoButton>
                         <NeoButton
-                          variant="danger"
-                          className="w-full"
+                          variant="secondary"
+                          className="w-full text-white !py-2 !text-base bg-gray-400 hover:bg-gray-500"
                           onClick={handleDislike}
                         >
-                          不对劲，换个绝活
+                          🔄 换一个试试
                         </NeoButton>
                       </div>
                     )}
                   </div>
+                  
+                  {/* 开启专注烹饪入口 */}
+                  <div className="mb-6">
+                    <NeoButton 
+                      onClick={() => setFocusRecipe(currentRecipe)} 
+                      variant="orange" 
+                      className="w-full text-lg py-4 flex items-center justify-center gap-2 shadow-sm font-black"
+                    >
+                      <span>👨‍🍳</span> 
+                      开启大字模式开始做这顿饭
+                    </NeoButton>
+                  </div>
 
-                  <div className="space-y-16">
+                  {/* 总采购清单 */}
+                  <div className="mb-8 bg-[#FFF8E1] rounded-2xl p-6 border border-yellow-200">
+                    <div className="flex justify-between items-center mb-4">
+                      <h3 className="font-bold text-xl text-[#6D4C41] flex items-center gap-2">
+                        🛒 总采购清单
+                      </h3>
+                      <button 
+                        onClick={() => {
+                          const ingredients = currentRecipe.dishes.flatMap(d => d.ingredients);
+                          const grouped = ingredients.reduce((acc, curr) => {
+                            if (!acc[curr.name]) acc[curr.name] = [];
+                            acc[curr.name].push(curr.amount);
+                            return acc;
+                          }, {} as Record<string, string[]>);
+                          
+                          const listText = `【${currentRecipe.title}】采购清单：\n` + 
+                            Object.entries(grouped)
+                              .map(([name, amounts]) => `- ${name}: ${(amounts as string[]).join(' + ')}`)
+                              .join('\n');
+                              
+                          navigator.clipboard.writeText(listText);
+                          showToast('✅ 采购清单已复制到剪贴板，快发给家人代买吧！');
+                        }}
+                        className="text-sm font-bold text-[#E65100] bg-white px-3 py-1.5 rounded-full border border-orange-200 hover:bg-orange-50 transition-colors shadow-sm active:scale-95"
+                      >
+                        📄 一键复制去买菜
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {(() => {
+                        const allIngredients = currentRecipe.dishes.flatMap(d => d.ingredients);
+                        const grouped = allIngredients.reduce((acc, curr) => {
+                          if (!acc[curr.name]) acc[curr.name] = [];
+                          acc[curr.name].push(curr.amount);
+                          return acc;
+                        }, {} as Record<string, string[]>);
+                        
+                        return Object.entries(grouped).map(([name, amounts], idx) => (
+                          <div key={idx} className="bg-white p-2 rounded-xl flex flex-col justify-center items-center shadow-sm border border-gray-100 text-center">
+                            <span className="font-bold text-[#4E342E] text-[15px]">{name}</span>
+                            <span className="text-xs text-gray-500 font-medium mt-1">{(amounts as string[]).join(' + ')}</span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
                     {currentRecipe.dishes.map((dish, idx) => (
                       <div
                         key={idx}
-                        className="border-[6px] border-black p-6 md:p-10 neo-shadow bg-[#FFF7E1] relative"
+                        className="border border-orange-100 rounded-2xl p-6 md:p-8 bg-[#FFFBF0] relative"
                       >
-                        <div className="absolute -top-8 left-4 bg-[#FF5722] text-white font-black text-2xl px-6 py-2 border-4 border-black transform -rotate-2">
-                          料理 {idx + 1}: {dish.name}
+                        <div className="inline-block bg-[#FF8A65] text-white font-bold text-lg px-4 py-1.5 rounded-full mb-4 shadow-sm">
+                          🍲 第 {idx + 1} 道菜：{dish.name}
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mt-4">
-                          <div className="space-y-4">
-                            <h4 className="font-black text-2xl mb-4 text-black border-b-4 border-black pb-2 flex items-center gap-2">
-                              🛒 战斗补给：
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 mt-2">
+                          <div className="md:col-span-4 space-y-3">
+                            <h4 className="font-bold text-lg text-[#6D4C41] flex items-center gap-2">
+                              🥕 用料：
                             </h4>
-                            <ul className="space-y-3">
+                            <ul className="space-y-2 bg-white/50 p-4 rounded-xl border border-orange-50/50">
                               {dish.ingredients.map((ing, i) => (
                                 <li
                                   key={i}
-                                  className="flex justify-between items-center border-b-2 border-black/10 border-dashed pb-2"
+                                  className="flex justify-between items-center border-b border-orange-100/50 pb-2 last:border-0 last:pb-0"
                                 >
-                                  <span className="font-black text-lg">
+                                  <span className="font-semibold text-[#4E342E]">
                                     {ing.name}
                                   </span>
-                                  <span className="font-black bg-black text-white px-2 py-1 text-xs">
+                                  <span className="font-medium text-gray-600 text-sm">
                                     {ing.amount}
                                   </span>
                                 </li>
                               ))}
                             </ul>
                           </div>
-                          <div className="space-y-4">
-                            <h4 className="font-black text-2xl mb-4 text-black border-b-4 border-black pb-2 flex items-center gap-2">
-                              🛠️ 征服过程：
+                          <div className="md:col-span-8 space-y-3">
+                            <h4 className="font-bold text-lg text-[#6D4C41] flex items-center gap-2">
+                              🍳 做法步骤：
                             </h4>
-                            <div className="space-y-5">
+                            <div className="space-y-4">
                               {dish.instructions.map((step) => (
                                 <div
                                   key={step.step}
-                                  className="flex gap-4 group"
+                                  className="flex gap-4 group bg-white p-4 rounded-xl shadow-sm border border-orange-50"
                                 >
-                                  <div className="bg-black text-white w-8 h-8 flex-shrink-0 flex items-center justify-center font-black text-lg group-hover:rotate-12 transition-transform">
+                                  <div className="bg-[#FFB74D] text-[#4E342E] w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm mt-0.5">
                                     {step.step}
                                   </div>
-                                  <p className="font-black text-base leading-snug italic text-gray-800">
+                                  <p className="font-semibold text-[#5D4037] leading-relaxed">
                                     {step.description}
                                   </p>
                                 </div>
@@ -740,17 +880,17 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     ))}
-                    <NeoCard
-                      color="bg-[#4CAF50] text-white"
-                      className="p-8 border-white/30"
-                    >
-                      <h3 className="font-black text-2xl mb-4 flex items-center gap-3">
-                        💡 蔡大厨的能量补给包：
-                      </h3>
-                      <p className="font-black text-lg leading-relaxed italic">
-                        “{currentRecipe.nutritionInfo}”
-                      </p>
-                    </NeoCard>
+                    
+                    {currentRecipe.nutritionInfo && (
+                      <div className="bg-[#E8F5E9] p-6 rounded-2xl border border-[#C8E6C9] mt-6">
+                        <h3 className="font-bold text-[#2E7D32] text-lg mb-2 flex items-center gap-2">
+                          💡 营养小贴士：
+                        </h3>
+                        <p className="font-semibold text-[#388E3C] leading-relaxed">
+                          {currentRecipe.nutritionInfo}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </NeoCard>
               </div>
@@ -758,26 +898,26 @@ const App: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="space-y-12 animate-in fade-in slide-in-from-right-10 duration-500">
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="space-y-8 animate-in fade-in slide-in-from-right-10 duration-500">
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <NeoCard
-              color="bg-[#9C27B0] text-white"
-              className="md:col-span-1 border-pink-400"
+              color="bg-[#FFF8E1]"
+              className="md:col-span-1 border-orange-100"
             >
-              <h3 className="text-3xl font-black mb-4 flex items-center gap-2 underline">
-                我的探险等级
+              <h3 className="text-2xl font-bold mb-4 flex items-center gap-2 text-[#4E342E]">
+                👑 家庭主厨称号
               </h3>
-              <p className="font-black text-2xl leading-tight italic">
+              <p className="font-semibold text-xl leading-snug text-[#6D4C41]">
                 “{tasteProfile}”
               </p>
               <div className="mt-6 flex flex-wrap gap-2">
-                <span className="bg-white text-black text-xs font-black px-3 py-1 border-2 border-black">
-                  已征服 {savedRecipes.length} 道料理
+                <span className="bg-[#FFB74D] text-[#4E342E] text-sm font-bold px-4 py-1.5 rounded-full shadow-sm">
+                  已做过 {savedRecipes.length} 道菜
                 </span>
               </div>
             </NeoCard>
-            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-8">
-              <NeoCard title="我的派系领地" color="bg-white">
+            <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <NeoCard title="⭐ 家人最爱菜系" color="bg-white" className="border-orange-50">
                 <div className="flex flex-wrap gap-3">
                   {(() => {
                     const stats = savedRecipes.reduce((acc, curr) => {
@@ -786,17 +926,17 @@ const App: React.FC = () => {
                     }, {} as Record<string, number>);
                     
                     return Object.entries(stats)
-                      .sort((a, b) => b[1] - a[1])
+                      .sort((a, b) => (b[1] as number) - (a[1] as number))
                       .slice(0, 5) // 仅显示前 5 名
                       .map(([cuisine, count]) => (
-                        <div key={cuisine} className="border-4 border-black px-4 py-2 bg-yellow-400 font-black text-lg shadow-inner">
-                          {cuisine} x{count}
+                        <div key={cuisine} className="border border-orange-100 px-4 py-2 rounded-xl bg-orange-50 text-[#E65100] font-bold text-md shadow-sm">
+                          {cuisine} <span className="text-orange-300 ml-1">x{count}</span>
                         </div>
                       ));
                   })()}
                 </div>
               </NeoCard>
-              <NeoCard title="战斗勋章" color="bg-white">
+              <NeoCard title="🔖 主厨小成就" color="bg-white" className="border-green-50">
                 <div className="flex flex-wrap gap-2">
                   {(() => {
                     const tagStats = savedRecipes.flatMap(r => r.tags).reduce((acc, tag) => {
@@ -805,10 +945,10 @@ const App: React.FC = () => {
                     }, {} as Record<string, number>);
 
                     return Object.entries(tagStats)
-                      .sort((a, b) => b[1] - a[1])
+                      .sort((a, b) => (b[1] as number) - (a[1] as number))
                       .slice(0, 12) // 固定显示前 12 个最热门标签
                       .map(([tag]) => (
-                        <div key={tag} className="border-2 border-black px-3 py-1 bg-pink-100 font-black text-xs uppercase tracking-tighter">
+                        <div key={tag} className="border border-green-200 px-3 py-1 bg-green-50 text-[#2E7D32] text-sm font-bold rounded-full">
                           #{tag}
                         </div>
                       ));
@@ -818,72 +958,170 @@ const App: React.FC = () => {
             </div>
           </section>
 
-          <NeoCard title={viewingSavedRecipe ? `查看计划：${viewingSavedRecipe.title}` : "我的美味地窖"} color="bg-white">
+          <NeoCard title={viewingSavedRecipe ? `美味记忆：${viewingSavedRecipe.title}` : ""} color="bg-transparent" className="!p-0 !border-none !shadow-none">
              {viewingSavedRecipe ? (
-               <div className="space-y-8 animate-in slide-in-from-bottom-12 duration-700">
-                 <div className="flex justify-between items-center border-b-4 border-black pb-4">
-                   <NeoButton onClick={() => setViewingSavedRecipe(null)} variant="primary">← 返回地窖</NeoButton>
-                   <span className="font-black text-xl bg-[#FFEB3B] px-4 py-2 border-2 border-black rotate-1">
-                     {new Date(viewingSavedRecipe.createdAt).toLocaleDateString()} 的美食记忆
+               <div className="space-y-6 animate-in slide-in-from-bottom-12 duration-700">
+                 <div className="flex justify-between items-center border-b-2 border-orange-100 pb-4 bg-white p-6 rounded-2xl shadow-sm">
+                   <NeoButton onClick={() => setViewingSavedRecipe(null)} variant="primary" className="!py-2 bg-orange-50 text-[#E65100] border-orange-200">
+                     ← 返回菜单本
+                   </NeoButton>
+                   <span className="font-bold text-sm text-[#8D6E63] bg-orange-50 px-4 py-2 rounded-full">
+                     📅 {new Date(viewingSavedRecipe.createdAt).toLocaleDateString()} 的美好记忆
                    </span>
                  </div>
                  
-                 <div className="space-y-16">
-                   <div className="flex flex-wrap gap-3">
-                     <span className="bg-black text-white px-4 py-2 text-sm font-black uppercase">{viewingSavedRecipe.cuisine}</span>
-                     <span className="bg-[#4CAF50] border-4 border-black px-4 py-2 text-sm font-black text-white">{viewingSavedRecipe.diners} 人套餐</span>
+                 <div className="space-y-6 bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-orange-50">
+                   <div className="flex flex-wrap gap-2 mb-6">
+                     <span className="bg-[#FFB74D] text-[#4E342E] px-4 py-1.5 rounded-full text-sm font-bold shadow-sm">{viewingSavedRecipe.cuisine}</span>
+                     <span className="bg-[#81C784] text-white px-4 py-1.5 rounded-full text-sm font-bold shadow-sm">👨‍👩‍👧‍👦 {viewingSavedRecipe.diners} 人份</span>
                      {viewingSavedRecipe.tags.map(tag => (
-                       <span key={tag} className="border-4 border-black px-4 py-2 text-sm font-black bg-yellow-200">#{tag}</span>
+                       <span key={tag} className="bg-orange-50 text-[#E65100] border border-orange-100 px-3 py-1.5 rounded-full text-sm font-bold">#{tag}</span>
                      ))}
                    </div>
 
-                   {viewingSavedRecipe.dishes.map((dish, idx) => (
-                     <div key={idx} className="border-[6px] border-black p-6 md:p-10 neo-shadow bg-[#FFF7E1] relative">
-                       <div className="absolute -top-8 left-4 bg-[#FF5722] text-white font-black text-2xl px-6 py-2 border-4 border-black transform -rotate-2">
-                         料理 {idx + 1}: {dish.name}
-                       </div>
-                       <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mt-4">
-                         <div className="space-y-4">
-                           <h4 className="font-black text-2xl mb-4 text-black border-b-4 border-black pb-2 flex items-center gap-2">🛒 战斗补给：</h4>
-                           <ul className="space-y-3">
-                             {dish.ingredients.map((ing, i) => (
-                               <li key={i} className="flex justify-between items-center border-b-2 border-black/10 border-dashed pb-2">
-                                 <span className="font-black text-lg">{ing.name}</span>
-                                 <span className="font-black bg-black text-white px-2 py-1 text-xs">{ing.amount}</span>
-                               </li>
-                             ))}
-                           </ul>
-                         </div>
-                         <div className="space-y-4">
-                           <h4 className="font-black text-2xl mb-4 text-black border-b-4 border-black pb-2 flex items-center gap-2">🛠️ 征服过程：</h4>
-                           <div className="space-y-5">
-                             {dish.instructions.map((step) => (
-                               <div key={step.step} className="flex gap-4 group">
-                                 <div className="bg-black text-white w-8 h-8 flex-shrink-0 flex items-center justify-center font-black text-lg">
-                                   {step.step}
-                                 </div>
-                                 <p className="font-black text-base leading-snug italic text-gray-800">{step.description}</p>
-                               </div>
-                             ))}
-                           </div>
-                         </div>
-                       </div>
+                    {/* 开启专注烹饪入口 (历史记录页) */}
+                    <div className="mb-6">
+                      <NeoButton 
+                        onClick={() => setFocusRecipe(viewingSavedRecipe)} 
+                        variant="orange" 
+                        className="w-full text-lg py-4 flex items-center justify-center gap-2 shadow-sm font-black"
+                      >
+                        <span>👨‍🍳</span> 
+                        开启大字模式开始做这顿饭
+                      </NeoButton>
+                    </div>
+
+                    {/* 总采购清单 (历史记录页) */}
+                   <div className="mb-8 bg-[#FFF8E1] rounded-2xl p-6 border border-yellow-200">
+                     <div className="flex justify-between items-center mb-4">
+                       <h3 className="font-bold text-xl text-[#6D4C41] flex items-center gap-2">
+                         🛒 此菜单的总采购清单
+                       </h3>
+                       <button 
+                         onClick={() => {
+                           const ingredients = viewingSavedRecipe.dishes.flatMap(d => d.ingredients);
+                           const grouped = ingredients.reduce((acc, curr) => {
+                             if (!acc[curr.name]) acc[curr.name] = [];
+                             acc[curr.name].push(curr.amount);
+                             return acc;
+                           }, {} as Record<string, string[]>);
+                           
+                           const listText = `【${viewingSavedRecipe.title}】采购清单：\n` + 
+                             Object.entries(grouped)
+                               .map(([name, amounts]) => `- ${name}: ${(amounts as string[]).join(' + ')}`)
+                               .join('\n');
+                               
+                           navigator.clipboard.writeText(listText);
+                           showToast('✅ 采购清单已复制到剪贴板！');
+                         }}
+                         className="text-sm font-bold text-[#E65100] bg-white px-3 py-1.5 rounded-full border border-orange-200 hover:bg-orange-50 transition-colors shadow-sm"
+                       >
+                         📄 复制去买菜
+                       </button>
                      </div>
+                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                       {(() => {
+                         const allIngredients = viewingSavedRecipe.dishes.flatMap(d => d.ingredients);
+                         const grouped = allIngredients.reduce((acc, curr) => {
+                           if (!acc[curr.name]) acc[curr.name] = [];
+                           acc[curr.name].push(curr.amount);
+                           return acc;
+                         }, {} as Record<string, string[]>);
+                         
+                         return Object.entries(grouped).map(([name, amounts], idx) => (
+                           <div key={idx} className="bg-white p-2 rounded-xl flex flex-col justify-center items-center shadow-sm border border-gray-100 text-center">
+                             <span className="font-bold text-[#4E342E] text-[15px]">{name}</span>
+                             <span className="text-xs text-gray-500 font-medium mt-1">{(amounts as string[]).join(' + ')}</span>
+                           </div>
+                         ));
+                       })()}
+                     </div>
+                   </div>
+
+                   {viewingSavedRecipe.dishes.map((dish, idx) => (
+                      <div
+                        key={idx}
+                        className="border border-orange-100 rounded-2xl p-6 md:p-8 bg-[#FFFBF0] relative"
+                      >
+                        <div className="inline-block bg-[#FF8A65] text-white font-bold text-lg px-4 py-1.5 rounded-full mb-4 shadow-sm">
+                          🍲 第 {idx + 1} 道菜：{dish.name}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 mt-2">
+                          <div className="md:col-span-4 space-y-3">
+                            <h4 className="font-bold text-lg text-[#6D4C41] flex items-center gap-2">
+                              🥕 用料：
+                            </h4>
+                            <ul className="space-y-2 bg-white/50 p-4 rounded-xl border border-orange-50/50">
+                              {dish.ingredients.map((ing, i) => (
+                                <li
+                                  key={i}
+                                  className="flex justify-between items-center border-b border-orange-100/50 pb-2 last:border-0 last:pb-0"
+                                >
+                                  <span className="font-semibold text-[#4E342E]">
+                                    {ing.name}
+                                  </span>
+                                  <span className="font-medium text-gray-600 text-sm">
+                                    {ing.amount}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div className="md:col-span-8 space-y-3">
+                            <h4 className="font-bold text-lg text-[#6D4C41] flex items-center gap-2">
+                              🍳 做法步骤：
+                            </h4>
+                            <div className="space-y-4">
+                              {dish.instructions.map((step) => (
+                                <div
+                                  key={step.step}
+                                  className="flex gap-4 group bg-white p-4 rounded-xl shadow-sm border border-orange-50"
+                                >
+                                  <div className="bg-[#FFB74D] text-[#4E342E] w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center font-bold text-sm mt-0.5">
+                                    {step.step}
+                                  </div>
+                                  <p className="font-semibold text-[#5D4037] leading-relaxed">
+                                    {step.description}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                    ))}
 
-                   <NeoCard color="bg-[#4CAF50] text-white" className="p-8 border-white/30">
-                     <h3 className="font-black text-2xl mb-4 flex items-center gap-3">💡 蔡大厨的能量补给包：</h3>
-                     <p className="font-black text-lg leading-relaxed italic">“{viewingSavedRecipe.nutritionInfo}”</p>
-                   </NeoCard>
+                   {viewingSavedRecipe.nutritionInfo && (
+                     <div className="bg-[#E8F5E9] p-6 rounded-2xl border border-[#C8E6C9] mt-6">
+                       <h3 className="font-bold text-[#2E7D32] text-lg mb-2 flex items-center gap-2">
+                         💡 营养小贴士：
+                       </h3>
+                       <p className="font-semibold text-[#388E3C] leading-relaxed">
+                         {viewingSavedRecipe.nutritionInfo}
+                       </p>
+                     </div>
+                   )}
+                   
+                   <div className="flex justify-end pt-4">
+                     <button
+                       onClick={() => removeSaved(viewingSavedRecipe.id)}
+                       className="text-red-400 hover:text-red-600 font-bold text-sm underline underline-offset-4 transition-colors p-2"
+                     >
+                       移除此记录
+                     </button>
+                   </div>
                  </div>
                </div>
              ) : savedRecipes.length === 0 ? (
-               <div className="text-center py-32 opacity-30">
-                 <p className="text-[120px] mb-8 grayscale">🏚️</p>
-                 <p className="font-black text-3xl uppercase">地窖空空如也，快去探险！</p>
+               <div className="text-center py-24 bg-white rounded-3xl border-2 border-dashed border-orange-100 shadow-sm">
+                 <p className="text-[100px] mb-6 opacity-60">📓</p>
+                 <p className="font-bold text-xl text-[#8D6E63] tracking-wide">
+                   菜单本还是空的哦~
+                 </p>
+                 <p className="text-gray-400 text-sm mt-2">快去发现并记录你家的私房菜谱吧！</p>
                </div>
               ) : (
-                <div className="space-y-16">
+                <div className="space-y-12">
                   {(() => {
                     // 按日期分组
                     const grouped = savedRecipes.reduce((acc, recipe) => {
@@ -899,46 +1137,59 @@ const App: React.FC = () => {
 
                     // 日期降序排列
                     const sortedDates = Object.keys(grouped).sort((a, b) => {
-                      // 这里使用各组最新一条的时间进行排序
                       return grouped[b][0].createdAt - grouped[a][0].createdAt;
                     });
 
                     return (
                       <>
-                        <div className="space-y-16">
+                        <div className="space-y-12">
                           {sortedDates.map(date => (
-                            <div key={date} className="space-y-8">
+                            <div key={date} className="space-y-6">
                               <div className="flex items-center gap-4">
-                                <h4 className="bg-black text-white px-6 py-2 font-black text-xl border-4 border-black inline-block skew-x-[-3deg]">
-                                  {date}
+                                <h4 className="text-[#E65100] bg-orange-50 border border-orange-100 px-5 py-1.5 rounded-full font-bold text-sm shadow-sm inline-block">
+                                  📌 {date}
                                 </h4>
-                                <div className="h-1 flex-grow bg-black/10"></div>
+                                <div className="h-px flex-grow bg-orange-100"></div>
                               </div>
                               
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                                 {grouped[date].map(recipe => (
                                   <div 
                                     key={recipe.id} 
                                     onClick={() => setViewingSavedRecipe(recipe)}
-                                    className="border-[6px] border-black p-8 neo-shadow hover:-translate-y-2 transition-transform bg-white group cursor-pointer relative overflow-hidden"
+                                    className="border border-orange-100 p-6 rounded-2xl shadow-sm hover:shadow-md hover:-translate-y-1 transition-all bg-white cursor-pointer relative flex flex-col h-full justify-between"
                                   >
-                                    <div className="flex flex-col h-full justify-between">
-                                      <div>
-                                        <h4 className="text-2xl font-black group-hover:underline underline-offset-4 decoration-4 decoration-[#FF5722] mb-4">
-                                          {recipe.title}
-                                        </h4>
-                                        <div className="flex flex-wrap gap-1 mb-6">
-                                          {recipe.dishes.map(d => (
-                                            <span key={d.name} className="text-[10px] font-black bg-gray-100 border border-black px-2 py-0.5">{d.name}</span>
-                                          ))}
-                                        </div>
+                                    <div>
+                                      <h4 className="text-xl font-bold text-[#4E342E] mb-3 leading-tight group-hover:text-[#D84315] transition-colors">
+                                        {recipe.title}
+                                      </h4>
+                                      <div className="flex flex-wrap gap-1.5 mb-4">
+                                        {recipe.dishes.map(d => (
+                                          <span key={d.name} className="text-xs font-semibold bg-[#FFF8E1] text-[#6D4C41] border border-yellow-100 px-2 py-1 rounded-md">
+                                            {d.name}
+                                          </span>
+                                        ))}
                                       </div>
-                                      <div className="flex justify-between items-center pt-6 border-t-2 border-black/10">
-                                        <div className="flex flex-col">
-                                          <span className="font-black text-xs text-blue-600 uppercase tracking-widest">{recipe.cuisine}</span>
-                                          <span className="font-black text-xs">{recipe.diners}人餐</span>
-                                        </div>
+                                    </div>
+                                    <div className="flex justify-between items-center pt-4 border-t border-gray-100">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-xs bg-orange-50 text-orange-600 px-2 py-0.5 rounded">{recipe.cuisine}</span>
+                                        <span className="font-medium text-xs text-gray-500">{recipe.diners} 人份</span>
                                       </div>
+                                    </div>
+                                    <div className="absolute top-4 right-4">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          removeSaved(recipe.id);
+                                        }}
+                                        className="text-gray-300 hover:text-red-500 transition-colors p-1 bg-white rounded-full hover:bg-red-50"
+                                        title="移除"
+                                      >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                        </svg>
+                                      </button>
                                     </div>
                                   </div>
                                 ))}
@@ -946,28 +1197,34 @@ const App: React.FC = () => {
                             </div>
                           ))}
                         </div>
-
+                        
+                        {/* 加载更多按钮 */}
                         {hasMore && (
-                          <div className="mt-16 text-center">
-                            <NeoButton
-                              variant="primary"
-                              size="lg"
+                          <div className="flex justify-center pt-8 pb-4">
+                            <button
                               onClick={fetchMoreRecipes}
                               disabled={isFetchingMore}
-                              className="px-12 py-6 text-2xl"
+                              className="bg-white px-8 py-3 rounded-full font-bold text-[#6D4C41] border border-orange-200 shadow-sm hover:shadow hover:bg-orange-50 hover:text-[#E65100] transition-all disabled:opacity-50 flex items-center gap-2"
                             >
                               {isFetchingMore ? (
-                                <span className="flex items-center gap-3">
-                                  <span className="animate-spin text-3xl">🍲</span> 大厨正在翻找陈年秘籍...
-                                </span>
-                              ) : "展开更多陈年美味 ↓"}
-                            </NeoButton>
+                                <>
+                                  <span className="animate-spin text-xl">🔥</span> 
+                                  正在厨房角落为您翻找...
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-xl">📚</span> 
+                                  翻看更老的菜谱
+                                </>
+                              )}
+                            </button>
                           </div>
                         )}
-                        
                         {!hasMore && savedRecipes.length > 0 && (
-                          <div className="mt-16 text-center opacity-30 select-none">
-                            <p className="font-black text-xl italic">— 到头了，地窖底部的尘埃在向你致意 —</p>
+                          <div className="text-center pt-8 pb-4">
+                            <p className="text-gray-400 font-medium text-sm">
+                              — 已经是所有的家庭料理记忆了 —
+                            </p>
                           </div>
                         )}
                       </>
@@ -978,7 +1235,88 @@ const App: React.FC = () => {
           </NeoCard>
         </div>
       )}
+      
+      {/* 添加家庭成员弹窗 */}
+      {showMemberModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl relative border border-orange-100">
+            <button 
+              onClick={() => setShowMemberModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 font-bold text-xl"
+            >
+              ×
+            </button>
+            <h3 className="text-xl font-bold text-[#4E342E] mb-6 flex items-center gap-2">👨‍👩‍👧 管理家人口味</h3>
+            
+            <div className="space-y-4 mb-6 max-h-[40vh] overflow-y-auto pr-2">
+              {familyMembers.map(m => (
+                <div key={m.id} className="p-3 bg-orange-50/50 border border-orange-100 rounded-2xl flex justify-between items-start gap-4">
+                  <div>
+                    <div className="font-bold text-[#6D4C41]">{m.name}</div>
+                    <div className="text-sm text-gray-500 mt-1">{m.preferences || '无特殊口味'}</div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setFamilyMembers(prev => prev.filter(fm => fm.id !== m.id));
+                      setSelectedMembers(prev => prev.filter(id => id !== m.id));
+                    }}
+                    className="text-red-400 hover:text-red-600 text-sm font-bold whitespace-nowrap px-2 py-1"
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+              {familyMembers.length === 0 && <div className="text-center text-gray-400 text-sm py-4">还未添加任何家庭成员</div>}
+            </div>
 
+            <div className="border-t border-orange-100 pt-5 space-y-4">
+              <h4 className="font-bold text-[#8D6E63] text-sm">新增家庭成员</h4>
+              <input 
+                type="text" 
+                placeholder="称呼 (如: 老公、女儿、爷爷)" 
+                value={newMember.name}
+                onChange={e => setNewMember({...newMember, name: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-orange-300 font-semibold"
+              />
+              <textarea 
+                rows={2}
+                placeholder="忌口或偏好 (如: 无辣不欢、不吃胡萝卜和香菜、要软烂)" 
+                value={newMember.preferences}
+                onChange={e => setNewMember({...newMember, preferences: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-orange-300 resize-none text-sm"
+              />
+              <NeoButton 
+                onClick={() => {
+                  if (!newMember.name?.trim()) {
+                    showToast("称呼不能为空哦！");
+                    return;
+                  }
+                  const newEntry: FamilyMember = {
+                    id: Date.now().toString(),
+                    name: newMember.name.trim(),
+                    preferences: newMember.preferences?.trim() || ''
+                  };
+                  setFamilyMembers([...familyMembers, newEntry]);
+                  setSelectedMembers([...selectedMembers, newEntry.id]);
+                  setNewMember({name: '', preferences: ''});
+                }}
+                variant="primary" 
+                className="w-full"
+              >
+                + 加入档案
+              </NeoButton>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 沉浸式专注烹饪组件（永远在最顶层） */}
+      {focusRecipe && (
+        <FocusCookingMode 
+          recipe={focusRecipe} 
+          onClose={() => setFocusRecipe(null)} 
+        />
+      )}
     </div>
   );
 };

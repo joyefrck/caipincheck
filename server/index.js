@@ -201,6 +201,11 @@ function initDb() {
     db.run(`ALTER TABLE base_recipes ADD COLUMN source TEXT DEFAULT 'scraped'`, (err) => {
       if (err && !err.message.includes('duplicate column')) console.error('添加source列失败:', err);
     });
+
+    // 兼容已有数据库：向 user_profile 添加 family_members
+    db.run(`ALTER TABLE user_profile ADD COLUMN family_members TEXT DEFAULT '[]'`, (err) => {
+      if (err && !err.message.includes('duplicate column')) console.error('添加family_members列失败:', err);
+    });
   });
 }
 
@@ -745,6 +750,7 @@ app.get('/api/user-profile/:userId', (req, res) => {
       ingredientWeights: JSON.parse(row.ingredient_weights),
       cookingMethodWeights: JSON.parse(row.cooking_method_weights),
       nutritionWeights: JSON.parse(row.nutrition_weights),
+      familyMembers: row.family_members ? JSON.parse(row.family_members) : [],
       updatedAt: row.updated_at
     });
   });
@@ -777,6 +783,22 @@ app.post('/api/user-profile/:userId', (req, res) => {
   db.run(sql, params, function(err) {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true, userId });
+  });
+});
+
+// 保存用户家庭成员
+app.post('/api/user-profile/:userId/family', (req, res) => {
+  const { userId } = req.params;
+  const { familyMembers } = req.body;
+  
+  if (!Array.isArray(familyMembers)) {
+    return res.status(400).json({ error: 'familyMembers 需要是一个数组' });
+  }
+
+  const sql = `UPDATE user_profile SET family_members = ?, updated_at = ? WHERE user_id = ?`;
+  db.run(sql, [JSON.stringify(familyMembers), Date.now(), userId], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, changes: this.changes });
   });
 });
 

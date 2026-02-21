@@ -73,6 +73,16 @@ export const apiService = {
     if (!response.ok) throw new Error("更新用户画像失败");
   },
 
+  // 保存家庭成员
+  saveFamilyMembers: async (userId: string, familyMembers: any[]): Promise<void> => {
+    const response = await fetch(`${API_BASE_URL}/user-profile/${userId}/family`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ familyMembers }),
+    });
+    if (!response.ok) throw new Error("保存家庭成员失败");
+  },
+
   // 记录用户反馈（喜欢/不喜欢）
   recordFeedback: async (userId: string, recipeId: string, feedbackType: 'like' | 'dislike', recipeData?: Recipe): Promise<void> => {
     const response = await fetch(`${API_BASE_URL}/user-feedback`, {

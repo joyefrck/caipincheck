@@ -146,9 +146,9 @@ ${JSON.stringify(recipeSchema, null, 2)}`;
   const responseText = await callDeepSeek(systemPrompt, userPrompt, true);
   
   // 检查是否是偏好调整响应
-  if (typeof responseText === 'object' && responseText.type === 'preference_update') {
-    // 这是偏好调整响应，直接返回消息给用户
-    const message = responseText.choices?.[0]?.message?.content || '偏好已更新';
+  if (responseText && typeof responseText === 'object' && (responseText as any).type === 'preference_update') {
+    // 处理提取到的偏好
+    const message = (responseText as any).choices?.[0]?.message?.content || '偏好已更新';
     throw new Error(`PREFERENCE_UPDATE:${message}`);
   }
   

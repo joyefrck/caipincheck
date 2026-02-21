@@ -7,5 +7,6 @@ export const TASTE_OPTIONS = ['辣的', '甜的', '酸的', '咸的', '淡的', 
 
 export const STORAGE_KEYS = {
   SAVED_RECIPES: 'neo_recipe_saved',
-  HISTORY: 'neo_recipe_history'
+  HISTORY: 'neo_recipe_history',
+  FAMILY_MEMBERS: 'neo_family_members',
 };

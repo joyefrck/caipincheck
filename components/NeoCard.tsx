@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 interface NeoCardProps {
@@ -17,16 +16,16 @@ const NeoCard: React.FC<NeoCardProps> = ({
   hasMarquee = false
 }) => {
   return (
-    <div className={`border-[6px] border-black ${color} neo-shadow-lg p-6 relative overflow-hidden ${className}`}>
+    <div className={`rounded-3xl border-2 border-orange-100/50 ${color} neo-shadow-lg p-6 relative overflow-hidden transition-all duration-300 ${className}`}>
       {hasMarquee && (
-        <div className="absolute top-0 left-0 w-full bg-black text-white py-1 overflow-hidden z-10 border-b-[4px] border-black">
-          <div className="animate-marquee font-black uppercase text-xs tracking-widest">
-            ★ HOT RECOMMENDATION ★ SPECIAL OF THE DAY ★ CHEF CAI'S CHOICE ★ YUMMY ALERT ★ 
+        <div className="absolute top-0 left-0 w-full bg-[#FF8A65] text-white py-1 overflow-hidden z-10 opacity-90">
+          <div className="animate-marquee font-bold text-xs tracking-wider">
+            ★ 温馨推荐 ★ 今日主厨精选 ★ 美味预警 ★ 为家人准备的惊喜 ★ 
           </div>
         </div>
       )}
       {title && (
-        <h2 className={`text-3xl font-black mb-6 uppercase tracking-tighter border-b-[6px] border-black pb-2 flex items-center gap-2 ${hasMarquee ? 'mt-6' : ''}`}>
+        <h2 className={`text-2xl font-bold mb-6 text-[#4E342E] tracking-tight border-b-2 border-orange-100 pb-3 flex items-center gap-2 ${hasMarquee ? 'mt-6' : ''}`}>
           {title}
         </h2>
       )}

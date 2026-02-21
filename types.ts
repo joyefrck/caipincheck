@@ -38,6 +38,12 @@ export interface UserPreferences {
   subCuisine?: ChineseSubCuisine;
 }
 
+export interface FamilyMember {
+  id: string;
+  name: string;
+  preferences: string; // 个人口味或忌口（例如：不吃香菜，无辣不欢）
+}
+
 // 用户画像类型
 export interface UserProfile {
   userId: string;
@@ -46,6 +52,7 @@ export interface UserProfile {
   ingredientWeights: Record<string, number>;   // 例如 {"鸡胸肉": 0.7}
   cookingMethodWeights: Record<string, number>; // 例如 {"清蒸": 0.9}
   nutritionWeights: Record<string, number>;     // 例如 {"蛋白质": 0.8}
+  familyMembers?: FamilyMember[];
   updatedAt: number;
 }
 
